@@ -1,0 +1,500 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum Role {
+  USER
+  ADMIN
+  ESSENTIAL
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  INCOMPLETE
+  UNPAID
+  EXPIRED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum VerificationTokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+enum AuditLogAction {
+  LOGIN
+  LOGOUT
+  REGISTER
+  PASSWORD_CHANGE
+  PASSWORD_RESET
+  EMAIL_VERIFY
+  ACCOUNT_LINKED
+  ACCOUNT_UNLINKED
+  TRADING_ACCOUNT_ADDED
+  TRADING_ACCOUNT_REMOVED
+  TRADE_SYNC
+  SUBSCRIPTION_CREATED
+  SUBSCRIPTION_UPDATED
+  SUBSCRIPTION_CANCELED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+}
+
+enum TradingPlatform {
+  MT5
+  MT4
+  CTRADER
+  INTERACTIVE_BROKERS
+  BINANCE
+  COINBASE
+  ALPACA
+  TRADINGVIEW
+  ETORO
+  WEBULL
+  TD_AMERITRADE
+  EXNESS
+  OTHER
+}
+
+enum OrderSide {
+  LONG
+  SHORT
+}
+
+enum CredentialType {
+  PASSWORD // MT5/MT4 style
+  API_KEY // Most modern platforms
+  OAUTH_TOKEN // OAuth-based platforms
+  WEBHOOK // TradingView style
+  SESSION_TOKEN // Some proprietary platforms
+}
+
+enum OrderType {
+  MARKET // Execute immediately at current market price
+  LIMIT // Execute at specific price or better
+  STOP // Market order triggered at stop price
+  STOP_LIMIT // Limit order triggered at stop price
+  TRAILING_STOP // Stop that trails the market price
+  TAKE_PROFIT // Close position at profit target
+  STOP_LOSS // Close position to limit loss
+  OCO // One-Cancels-Other
+  ICEBERG // Large order shown in small chunks
+  POST_ONLY // Maker-only order (adds liquidity)
+  FOK // Fill-or-Kill
+  IOC // Immediate-or-Cancel
+  GTC // Good-Till-Canceled
+  GTD // Good-Till-Date
+  DAY // Valid until end of trading day
+}
+
+enum OrderStatus {
+  PENDING // Order created but not submitted
+  OPEN // Order active, waiting to be filled
+  PARTIALLY_FILLED // Order partially executed
+  FILLED // Order completely executed
+  CANCELED // Order canceled
+  REJECTED // Order rejected by broker
+  EXPIRED // Order expired (GTD/DAY)
+  TRIGGERED // Stop order activated
+  SUSPENDED // Temporarily suspended
+  REPLACED // Order replaced/modified
+}
+
+enum TradeSide {
+  BUY // Buy/Long
+  SELL // Sell/Short
+}
+
+enum PositionSide {
+  LONG // Long position
+  SHORT // Short position
+  FLAT // No position
+}
+
+enum AuthProviders {
+  FACEBOOK
+  GOOGLE
+}
+
+// ==========================================
+// USER & AUTHENTICATION SECTION
+// ==========================================
+
+model User {
+  id                 String    @id @default(cuid())
+  firstName          String
+  lastName           String
+  email              String    @unique
+  emailVerified      DateTime?
+  password           String? // Hashed password for email/password auth
+  hashedRefreshToken String?   @db.Text
+  imageUrl           String?
+  role               Role      @default(USER)
+  isActive           Boolean   @default(true)
+  lastLoginAt        DateTime?
+  deleted            Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  accounts        Account[]
+  sessions        Session[]
+  tradingAccounts TradingAccount[]
+  auditLogs       AuditLog[]
+  subscription    Subscription?
+  payments        Payment[]
+
+  @@index([email])
+  @@index([role])
+  @@index([isActive])
+}
+
+model Account {
+  id                String        @id @default(cuid())
+  userId            String
+  type              String
+  provider          AuthProviders // "google", "facebook", "apple", or "credentials"
+  providerAccountId String
+  refresh_token     String?       @db.Text
+  access_token      String?       @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?       @db.Text
+  session_state     String?
+  deleted           Boolean       @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  ipAddress    String?
+  userAgent    String?
+  deleted      Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sessionToken])
+}
+
+model VerificationToken {
+  id         String                @id @default(cuid())
+  identifier String // email
+  token      String                @unique
+  type       VerificationTokenType
+  expires    DateTime
+  createdAt  DateTime              @default(now())
+  deleted    Boolean               @default(false)
+
+  @@unique([identifier, token, type])
+  @@index([token])
+  @@index([identifier])
+}
+
+model AuditLog {
+  id        String         @id @default(cuid())
+  userId    String
+  action    AuditLogAction
+  ipAddress String?
+  userAgent String?
+  metadata  Json? // Additional context data
+  createdAt DateTime       @default(now())
+  deleted   Boolean        @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([action])
+  @@index([createdAt(sort: Desc)])
+}
+
+// ==========================================
+// SUBSCRIPTION & PAYMENT SECTION
+// ==========================================
+
+model Subscription {
+  id     String             @id @default(cuid())
+  userId String             @unique
+  plan   Role // ESSENTIAL or PREMIUM
+  status SubscriptionStatus @default(ACTIVE)
+
+  // Billing period
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean   @default(false)
+  canceledAt         DateTime?
+
+  // Payment provider details (Stripe example)
+  stripeCustomerId     String? @unique
+  stripeSubscriptionId String? @unique
+  stripePriceId        String?
+
+  // Trial support
+  trialStart DateTime?
+  trialEnd   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deleted   Boolean  @default(false)
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([stripeCustomerId])
+  @@index([currentPeriodEnd])
+}
+
+model Payment {
+  id              String        @id @default(cuid())
+  userId          String
+  subscriptionId  String?
+  amount          Float
+  currency        String        @default("USD")
+  status          PaymentStatus @default(PENDING)
+  stripePaymentId String?       @unique
+  invoiceUrl      String?
+  failureReason   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deleted         Boolean       @default(false)
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([createdAt(sort: Desc)])
+}
+
+// ==========================================
+// MULTI-PLATFORM TRADING SECTION
+// ==========================================
+
+model TradingAccount {
+  id       String          @id @default(cuid())
+  platform TradingPlatform // MT5, MT4, cTrader, etc.
+
+  // Universal identifiers
+  accountIdentifier String // Could be: MT5 login, broker account number, email, etc.
+  brokerName        String?
+  accountName       String? // User's friendly name for this account
+
+  // Platform-specific connection details (stored as JSON for flexibility)
+  connectionConfig Json // Stores platform-specific auth data
+  /**
+   * Examples:
+   * MT5/MT4: { serverAddress: "...", encryptedPassword: "..." }
+   * cTrader: { accessToken: "...", refreshToken: "...", tokenExpiry: "..." }
+   * Binance: { apiKey: "...", encryptedSecret: "..." }
+   * Interactive Brokers: { clientId: "...", encryptedApiKey: "..." }
+   * TradingView: { webhookUrl: "...", webhookSecret: "..." }
+   */
+
+  // Account metrics (universal across platforms)
+  balance    Float  @default(0)
+  equity     Float?
+  margin     Float?
+  freeMargin Float?
+  currency   String @default("USD")
+  leverage   Int?
+
+  // Account status
+  isActive      Boolean   @default(true)
+  isDemo        Boolean   @default(false)
+  isPaperTrade  Boolean   @default(false) // For platforms with paper trading
+  lastSyncAt    DateTime?
+  syncError     String?
+  syncFrequency Int       @default(60) // Seconds between syncs
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deals     Deal[]
+  orders    Order[]
+  positions Position[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deleted   Boolean  @default(false)
+
+  @@unique([userId, platform, accountIdentifier])
+  @@index([userId])
+  @@index([platform])
+  @@index([accountIdentifier])
+  @@index([isActive])
+}
+
+model Deal {
+  id                 String  @id @default(cuid())
+  externalId         String // Platform's trade ID (could be BigInt string, UUID, etc.)
+  orderExternalId    String? // Reference to order (if applicable)
+  positionExternalId String? // Reference to position (if applicable)
+
+  // Universal trade data
+  symbol    String
+  volume    Float
+  price     Float
+  profit    Float
+  time      DateTime
+  side      OrderSide // "LONG" or "SHORT" (universal)
+  entryType String? // "IN", "OUT", "IN_OUT" (for MT5), or platform-specific
+
+  // Fees and costs
+  swap       Float @default(0)
+  commission Float @default(0)
+  fee        Float @default(0)
+
+  // Platform-specific data
+  platformData Json? // Store any platform-specific fields
+  /**
+   * Examples:
+   * MT5: { type: 0, entry: 0, magic: 12345, ticket: "123456789" }
+   * Binance: { orderId: "...", tradeId: "...", isBuyer: true }
+   * Interactive Brokers: { execId: "...", liquidation: false }
+   */
+
+  comment String?
+
+  tradingAccountId String
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deleted   Boolean  @default(false)
+
+  @@unique([tradingAccountId, externalId])
+  @@index([tradingAccountId, time(sort: Desc)])
+  @@index([symbol])
+  @@index([externalId])
+  @@index([time(sort: Desc)])
+}
+
+model Order {
+  id         String @id @default(cuid())
+  externalId String // Platform's order ID
+
+  // Universal order data
+  symbol        String
+  side          OrderSide // "LONG" or "SHORT"
+  orderType     String // "MARKET", "LIMIT", "STOP", "STOP_LIMIT", etc.
+  status        String // "PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELED", "REJECTED"
+  volumeInitial Float
+  volumeFilled  Float     @default(0)
+  priceOrder    Float? // Limit/Stop price (null for market orders)
+  priceFilled   Float? // Average fill price
+  stopLoss      Float     @default(0)
+  takeProfit    Float     @default(0)
+
+  // Timestamps
+  timeCreated DateTime
+  timeFilled  DateTime?
+  timeExpiry  DateTime? // For GTD (Good-Till-Date) orders
+
+  // Platform-specific data
+  platformData Json? // Store platform-specific fields
+  /**
+   * Examples:
+   * MT5: { type: 0, state: 1, magic: 12345, reason: 0, ticket: "123456789" }
+   * Binance: { timeInForce: "GTC", clientOrderId: "..." }
+   * Alpaca: { legs: [...], trail_percent: 1.5 }
+   */
+
+  comment String?
+
+  tradingAccountId String
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deleted   Boolean  @default(false)
+
+  @@unique([tradingAccountId, externalId])
+  @@index([tradingAccountId, status])
+  @@index([symbol])
+  @@index([timeCreated(sort: Desc)])
+  @@index([status])
+}
+
+model Position {
+  id         String @id @default(cuid())
+  externalId String // Platform's position ID
+
+  // Universal position data
+  symbol       String
+  side         PositionSide // LONG, SHORT, FLAT
+  volume       Float
+  priceOpen    Float
+  priceCurrent Float
+  priceAverage Float? // Average entry price (for positions built over time)
+  stopLoss     Float        @default(0)
+  takeProfit   Float        @default(0)
+
+  // Profit and costs
+  unrealizedPnl Float @default(0)
+  realizedPnl   Float @default(0)
+  swap          Float @default(0)
+  commission    Float @default(0)
+
+  // Timestamps
+  timeOpen   DateTime
+  timeUpdate DateTime
+
+  // Platform-specific data
+  platformData Json? // Store platform-specific fields
+  /**
+   * Examples:
+   * MT5: { type: 0, magic: 12345, positionId: "123456789" }
+   * Binance: { leverage: 10, marginType: "isolated", liquidationPrice: 45000 }
+   * Interactive Brokers: { account: "...", avgCost: 150.25 }
+   */
+
+  comment String?
+
+  tradingAccountId String
+  tradingAccount   TradingAccount @relation(fields: [tradingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deleted   Boolean  @default(false)
+
+  @@unique([tradingAccountId, externalId])
+  @@index([tradingAccountId])
+  @@index([symbol])
+  @@index([timeOpen(sort: Desc)])
+  @@index([side])
+}
