@@ -8,5 +8,5 @@ export class VerifyEmailDto {
   @IsString()
   @MinLength(4)
   @MaxLength(10)
-  verificationCode: string;
+  verificationCode?: string;
 }

@@ -5,6 +5,9 @@ import {
   UnauthorizedException,
   ConflictException,
   NotFoundException,
+  HttpStatus,
+  HttpException,
+  BadRequestException,
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { compare, hash } from "bcrypt";
@@ -85,7 +88,9 @@ export class AuthService {
 
     //send verification email
     const verificationCode = randomInt(1000, 10000).toString();
-    await this.cacheService.set(`verificationCode:${registerDto.email}`, verificationCode);
+    const ttl30mins = 30 * 60 * 1000;
+    await this.cacheService.set(`verificationCode:${registerDto.email}`, verificationCode, ttl30mins);
+    await this.cacheService.set(`verificationAttempt:${registerDto.email}`, 1, ttl30mins);
     await this.emailService.sendVerificationEmail(registerDto.email, verificationCode, registerDto.firstName);
 
     // Create audit log
@@ -101,7 +106,12 @@ export class AuthService {
   async verifyEmail(verifyEmailDto: VerifyEmailDto, ipAddress?: string, userAgent?: string) {
     const verificationCode = await this.cacheService.get(`verificationCode:${verifyEmailDto.email}`);
     const user = await this.userService.findByEmail(verifyEmailDto.email);
-    if (verificationCode && user) {
+    if (
+      verificationCode &&
+      verificationCode === verifyEmailDto.verificationCode &&
+      user &&
+      user.emailVerified == null
+    ) {
       await this.userService.updateUser({
         where: {
           email: verifyEmailDto.email,
@@ -122,8 +132,27 @@ export class AuthService {
       return {
         tokens,
       };
+    } else if (user && user.emailVerified == null) {
+      let verificationAttempt = (await this.cacheService.get(`verificationAttempt:${user.email}`)) as number;
+      if (!verificationAttempt || verificationAttempt <= 5) {
+        const verificationCode = randomInt(1000, 10000).toString();
+        verificationAttempt = verificationAttempt || 0;
+
+        const ttl30mins = 30 * 60 * 1000;
+        await this.cacheService.set(`verificationCode:${user.email}`, verificationCode, ttl30mins);
+        await this.cacheService.set(`verificationAttempt:${user.email}`, verificationAttempt + 1, ttl30mins);
+        await this.emailService.sendVerificationEmail(user.email, verificationCode, user.firstName);
+      } else {
+        throw new HttpException(
+          "Too many verification attempts. Please try again later.",
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
     } else {
-      throw NotFoundException;
+      throw new HttpException(
+        "Too many verification attempts. Please try again later.",
+        HttpStatus.NOT_FOUND,
+      );
     }
   }
 
@@ -262,6 +291,167 @@ export class AuthService {
     }
 
     return this.mapToCurrentUser(user);
+  }
+  /**
+   * Request password reset
+   */
+  async forgotPassword(email: string, ipAddress?: string, userAgent?: string): Promise<{ message: string }> {
+    // Check if user exists
+    const user = await this.userService.findByEmail(email);
+    if (!user) {
+      // Don't reveal if user exists for security
+      return { message: "If the email exists, a reset code will be sent." };
+    }
+
+    // Check rate limiting
+    const attemptKey = `password_reset_attempts:${email}`;
+    const currentAttempts = (await this.cacheService.get<number>(attemptKey)) || 0;
+    const maxAttempts = 5;
+
+    if (currentAttempts >= maxAttempts) {
+      const retryAfter = 900; // 15 minutes
+      //throw new
+    }
+
+    // Generate reset code
+    const resetCode = randomInt(1000, 10000).toString();
+    const resetKey = `password_reset:${email}`;
+    const ttl = 15 * 60 * 1000; // 15 minutes
+
+    // Store in cache
+    await this.cacheService.set(
+      resetKey,
+      {
+        code: resetCode,
+        attempts: 0,
+        createdAt: new Date().toISOString(),
+      },
+      ttl,
+    );
+
+    // Increment attempt counter
+    await this.cacheService.set(attemptKey, currentAttempts + 1, 3600); // 1 hour TTL
+
+    // Send email
+    await this.emailService.sendPasswordResetEmail(email, resetCode, user.firstName);
+
+    // Create audit log
+    await this.userService.createAuditLog(
+      user.id,
+      AuditLogAction.PASSWORD_RESET_REQUEST,
+      ipAddress,
+      userAgent,
+      {
+        method: "email",
+      },
+    );
+
+    return { message: "If the email exists, a reset code will be sent." };
+  }
+
+  /**
+   * Verify reset code
+   */
+  async verifyResetCode(email: string, code: string): Promise<{ isValid: boolean }> {
+    const resetKey = `password_reset:${email}`;
+    const resetData = await this.cacheService.get<{
+      code: string;
+      attempts: number;
+      createdAt: string;
+    }>(resetKey);
+
+    if (!resetData) {
+      throw new BadRequestException("Reset code expired or invalid.");
+    }
+
+    // Check attempts
+    const maxAttempts = 3;
+    if (resetData.attempts >= maxAttempts) {
+      await this.cacheService.del(resetKey);
+      throw new BadRequestException("Too many failed attempts. Please request a new code.");
+    }
+
+    // Verify code
+    if (resetData.code !== code) {
+      // Increment failed attempts
+      await this.cacheService.set(resetKey, {
+        ...resetData,
+        attempts: resetData.attempts + 1,
+      });
+
+      throw new BadRequestException("Invalid verification code.");
+    }
+
+    // Code is valid, mark as verified
+    await this.cacheService.set(`${resetKey}:verified`, true, 5 * 60 * 1000); // 5 minutes for reset
+
+    return { isValid: true };
+  }
+
+  /**
+   * Reset password
+   */
+  async resetPassword(
+    email: string,
+    code: string,
+    newPassword: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<{ message: string }> {
+    // Verify the code first
+    await this.verifyResetCode(email, code);
+
+    const user = await this.userService.findByEmail(email);
+    if (!user) {
+      throw new BadRequestException("Invalid reset request.");
+    }
+
+    // Check if code was verified
+    const resetKey = `password_reset:${email}`;
+    const verifiedKey = `${resetKey}:verified`;
+    const isVerified = await this.cacheService.get<boolean>(verifiedKey);
+
+    if (!isVerified) {
+      throw new BadRequestException("Reset code not verified.");
+    }
+
+    // Hash new password
+    const hashedPassword = await hash(newPassword, 10);
+
+    // Update user password
+    await this.userService.updateUser({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+      },
+    });
+
+    // Clear all sessions (invalidate existing refresh tokens)
+    await this.userService.updateHashedRefreshToken(user.id, null);
+
+    // Clear cache
+    await this.cacheService.del(resetKey);
+    await this.cacheService.del(verifiedKey);
+
+    // Clear rate limit counter
+    await this.cacheService.del(`password_reset_attempts:${email}`);
+
+    // Create audit log
+    await this.userService.createAuditLog(user.id, AuditLogAction.PASSWORD_RESET, ipAddress, userAgent, {
+      method: "email",
+    });
+
+    // Send confirmation email
+    await this.emailService.sendPasswordChangedEmail(email, user.firstName);
+
+    return { message: "Password has been reset successfully." };
+  }
+
+  /**
+   * Generate reset code (helper method)
+   */
+  private generateResetCode(): string {
+    return randomInt(100000, 999999).toString();
   }
 
   private mapToCurrentUser(user: User): CurrentUser {

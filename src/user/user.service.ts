@@ -2,7 +2,7 @@
 // user.service.ts - Extended version
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "@/prisma.service";
-import { AuditLogAction, AuthProviders, Prisma, User } from "@prisma/client";
+import { AuditLog, AuditLogAction, AuthProviders, Prisma, User } from "@prisma/client";
 import { CacheService } from "@/cache/cache.service";
 
 @Injectable()
@@ -171,20 +171,42 @@ export class UserService {
     });
   }
 
+  async updateUserPassword(userId: string, hashedPassword: string): Promise<User> {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        password: hashedPassword,
+      },
+    });
+  }
+
+  /**
+   * Invalidate all refresh tokens for user
+   */
+  async invalidateAllRefreshTokens(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { hashedRefreshToken: null },
+    });
+  }
+
+  /**
+   * Create audit log entry
+   */
   async createAuditLog(
     userId: string,
     action: AuditLogAction,
     ipAddress?: string,
     userAgent?: string,
-    metadata?: any,
-  ) {
-    return await this.prisma.auditLog.create({
+    metadata?: Record<string, any>,
+  ): Promise<AuditLog> {
+    return this.prisma.auditLog.create({
       data: {
         userId,
         action,
-        ipAddress,
-        userAgent,
-        metadata,
+        ipAddress: ipAddress || null,
+        userAgent: userAgent || null,
+        metadata: metadata || {},
       },
     });
   }

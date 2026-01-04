@@ -127,7 +127,7 @@ export class AuthController {
     );
 
     res.redirect(
-      `http://localhost:5173/auth/callback?` +
+      `http://localhost:3000/auth/callback?` +
         `access_token=${result.accessToken}` +
         `&refresh_token=${result.refreshToken}` +
         `&user=${encodeURIComponent(JSON.stringify(result.user))}`,
@@ -163,7 +163,7 @@ export class AuthController {
     );
 
     res.redirect(
-      `http://localhost:5173/auth/callback?` +
+      `http://localhost:3000/auth/callback?` +
         `access_token=${result.accessToken}` +
         `&refresh_token=${result.refreshToken}` +
         `&user=${encodeURIComponent(JSON.stringify(result.user))}`,
@@ -174,5 +174,27 @@ export class AuthController {
   @Get("profile")
   getProfile(@Req() req: AuthenticatedRequest) {
     return req.user;
+  }
+
+  @Public()
+  @Post("forgot-password")
+  async forgotPassword(@Body() forgotPasswordDto: { email: string }) {
+    return this.authService.forgotPassword(forgotPasswordDto.email);
+  }
+
+  @Public()
+  @Post("verify-reset-code")
+  async verifyResetCode(@Body() verifyCodeDto: { email: string; code: string }) {
+    return this.authService.verifyResetCode(verifyCodeDto.email, verifyCodeDto.code);
+  }
+
+  @Public()
+  @Post("reset-password")
+  async resetPassword(@Body() resetPasswordDto: { email: string; code: string; newPassword: string }) {
+    return this.authService.resetPassword(
+      resetPasswordDto.email,
+      resetPasswordDto.code,
+      resetPasswordDto.newPassword,
+    );
   }
 }
