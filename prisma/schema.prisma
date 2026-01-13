@@ -413,8 +413,8 @@ model Order {
   // Universal order data
   symbol        String
   side          OrderSide // "LONG" or "SHORT"
-  orderType     String // "MARKET", "LIMIT", "STOP", "STOP_LIMIT", etc.
-  status        String // "PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELED", "REJECTED"
+  orderType     OrderType // "MARKET", "LIMIT", "STOP", "STOP_LIMIT", etc.
+  status        OrderStatus // "PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELED", "REJECTED"
   volumeInitial Float
   volumeFilled  Float     @default(0)
   priceOrder    Float? // Limit/Stop price (null for market orders)

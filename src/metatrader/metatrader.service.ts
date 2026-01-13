@@ -1,13 +1,28 @@
 // src/metatrader/metatrader.service.ts
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
-import { HttpService } from '@nestjs/axios';
-import { ConfigService } from '@nestjs/config';
-import { Observable, throwError, firstValueFrom } from 'rxjs';
-import { map, catchError } from 'rxjs/operators';
-import { AxiosError, AxiosResponse } from 'axios';
-import { AccountInfo, AccountSummary } from './interfaces/account.interface';
-import { Position } from './interfaces/position.interface';
-import { TradeHistoryResponse } from './interfaces/trade.interface';
+import { Injectable, Logger, HttpException, HttpStatus } from "@nestjs/common";
+import { HttpService } from "@nestjs/axios";
+import { ConfigService } from "@nestjs/config";
+import { Observable, throwError, firstValueFrom } from "rxjs";
+import { map, catchError } from "rxjs/operators";
+import { AxiosError, AxiosResponse } from "axios";
+import {
+  AccountInfo,
+  AccountSummary,
+  AllAccountsSummary,
+  ConnectionStatus,
+  ConnectionConfig,
+  ConnectionTestResult,
+  ConnectionStats,
+} from "./interfaces/account.interface";
+import { Position, AllPositionsResponse, PositionsBySymbolResponse } from "./interfaces/position.interface";
+import {
+  TradeHistoryResponse,
+  CurrentStateResponse,
+  PlaceOrderRequest,
+  PlaceOrderResponse,
+  SymbolInfo,
+  AvailableSymbolsResponse,
+} from "./interfaces/trade.interface";
 
 @Injectable()
 export class MetatraderService {
@@ -19,17 +34,10 @@ export class MetatraderService {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    // Use type assertion to tell TypeScript the shape
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    const metatraderConfig = this.configService.get('metatraderService') as
-      | {
-          baseUrl: string;
-          apiKey: string;
-        }
-      | undefined;
+    const metatraderConfig = this.configService.get("metatraderService");
 
     if (!metatraderConfig) {
-      throw new Error('Metatrader configuration not found');
+      throw new Error("Metatrader configuration not found");
     }
 
     this.baseUrl = metatraderConfig.baseUrl;
@@ -38,14 +46,13 @@ export class MetatraderService {
 
   private getHeaders(): Record<string, string> {
     return {
-      'x-api-key': this.apiKey,
-      'Content-Type': 'application/json',
+      "x-api-key": this.apiKey,
+      "Content-Type": "application/json",
     };
   }
 
   private handleError(error: unknown, context: string): never {
-    // Safely extract error message
-    let errorMessage = 'Unknown error';
+    let errorMessage = "Unknown error";
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
     let errorDetails: unknown = undefined;
 
@@ -67,7 +74,7 @@ export class MetatraderService {
 
     if (error instanceof Error) {
       errorMessage = error.message;
-    } else if (typeof error === 'string') {
+    } else if (typeof error === "string") {
       errorMessage = error;
     }
 
@@ -81,78 +88,373 @@ export class MetatraderService {
     );
   }
 
-  // Health checks
-  async checkHealth(): Promise<string> {
+  // ============ Health Endpoints ============
+  async checkHealth(): Promise<{ status: string }> {
     try {
-      const response$ = this.httpService.get<string>(
-        `${this.baseUrl}/api/v1/health`,
+      const response$ = this.httpService.get<{ status: string }>(`${this.baseUrl}/health`);
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Health check failed");
+    }
+  }
+
+  async checkMetatraderHealth(connectionName?: string): Promise<any> {
+    try {
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<any>(`${this.baseUrl}/health/mt5`, { params });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Metatrader health check failed");
+    }
+  }
+
+  async fullHealthCheck(): Promise<any> {
+    try {
+      const response$ = this.httpService.get<any>(`${this.baseUrl}/health/full`);
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Full health check failed");
+    }
+  }
+
+  // ============ Account Endpoints ============
+  async getAccountInfo(connectionName?: string): Promise<AccountInfo> {
+    try {
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<AccountInfo>(`${this.baseUrl}/account/info`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get account info");
+    }
+  }
+
+  async getAccountSummary(connectionName?: string): Promise<AccountSummary> {
+    try {
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<AccountSummary>(`${this.baseUrl}/account/summary`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get account summary");
+    }
+  }
+
+  async getAllAccountsSummary(): Promise<AllAccountsSummary> {
+    try {
+      const response$ = this.httpService.get<AllAccountsSummary>(`${this.baseUrl}/account/all-summary`, {
+        headers: this.getHeaders(),
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get all accounts summary");
+    }
+  }
+
+  async getConnectionsStatus(connectionName?: string): Promise<ConnectionStatus> {
+    try {
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<ConnectionStatus>(`${this.baseUrl}/account/connections`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get connections status");
+    }
+  }
+
+  // ============ Connection Management Endpoints ============
+  async createConnection(config: ConnectionConfig): Promise<any> {
+    try {
+      const response$ = this.httpService.post<any>(`${this.baseUrl}/connections/`, config, {
+        headers: this.getHeaders(),
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to create connection");
+    }
+  }
+
+  async testConnection(config: ConnectionConfig): Promise<ConnectionTestResult> {
+    try {
+      const response$ = this.httpService.post<ConnectionTestResult>(
+        `${this.baseUrl}/connections/test`,
+        config,
+        {
+          headers: this.getHeaders(),
+        },
       );
       const response = await firstValueFrom(response$);
       return response.data;
     } catch (error) {
-      this.handleError(error, 'Health check failed');
+      this.handleError(error, "Failed to test connection");
     }
   }
 
-  async checkMetatraderHealth(): Promise<string> {
+  async listConnections(detailed?: boolean, status?: string): Promise<any> {
     try {
-      const response$ = this.httpService.get<string>(
-        `${this.baseUrl}/api/v1/health/metatrader`,
+      const params: Record<string, any> = {};
+      if (detailed) params.detailed = detailed;
+      if (status) params.status = status;
+
+      const response$ = this.httpService.get<any>(`${this.baseUrl}/connections/`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to list connections");
+    }
+  }
+
+  async getConnection(name: string): Promise<any> {
+    try {
+      const response$ = this.httpService.get<any>(`${this.baseUrl}/connections/${name}`, {
+        headers: this.getHeaders(),
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to get connection ${name}`);
+    }
+  }
+
+  async updateConnection(name: string, config: any): Promise<any> {
+    try {
+      const response$ = this.httpService.put<any>(`${this.baseUrl}/connections/${name}`, config, {
+        headers: this.getHeaders(),
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to update connection ${name}`);
+    }
+  }
+
+  async deleteConnection(name: string, force?: boolean): Promise<any> {
+    try {
+      const params: Record<string, any> = {};
+      if (force) params.force = force;
+
+      const response$ = this.httpService.delete<any>(`${this.baseUrl}/connections/${name}`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to delete connection ${name}`);
+    }
+  }
+
+  async connectToAccount(name: string): Promise<any> {
+    try {
+      const response$ = this.httpService.post<any>(
+        `${this.baseUrl}/connections/${name}/connect`,
+        {},
+        {
+          headers: this.getHeaders(),
+        },
       );
       const response = await firstValueFrom(response$);
       return response.data;
     } catch (error) {
-      this.handleError(error, 'Metatrader health check failed');
+      this.handleError(error, `Failed to connect to ${name}`);
     }
   }
 
-  // Account endpoints
-  async getAccountInfo(): Promise<AccountInfo> {
+  async disconnectFromAccount(name: string): Promise<any> {
     try {
-      const response$ = this.httpService.get<AccountInfo>(
-        `${this.baseUrl}/api/v1/account/info`,
+      const response$ = this.httpService.post<any>(
+        `${this.baseUrl}/connections/${name}/disconnect`,
+        {},
+        {
+          headers: this.getHeaders(),
+        },
+      );
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to disconnect from ${name}`);
+    }
+  }
+
+  async reconnectToAccount(name: string): Promise<any> {
+    try {
+      const response$ = this.httpService.post<any>(
+        `${this.baseUrl}/connections/${name}/reconnect`,
+        {},
+        {
+          headers: this.getHeaders(),
+        },
+      );
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to reconnect to ${name}`);
+    }
+  }
+
+  async setDefaultConnection(name: string): Promise<any> {
+    try {
+      const response$ = this.httpService.post<any>(
+        `${this.baseUrl}/connections/${name}/set-default`,
+        {},
+        {
+          headers: this.getHeaders(),
+        },
+      );
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to set default connection ${name}`);
+    }
+  }
+
+  async getConnectionStats(): Promise<ConnectionStats> {
+    try {
+      const response$ = this.httpService.get<ConnectionStats>(`${this.baseUrl}/connections/stats/summary`, {
+        headers: this.getHeaders(),
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get connection stats");
+    }
+  }
+
+  async getAvailableServers(): Promise<any> {
+    try {
+      const response$ = this.httpService.get<any>(`${this.baseUrl}/connections/available/servers`, {
+        headers: this.getHeaders(),
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get available servers");
+    }
+  }
+
+  async connectMultiple(names: string[]): Promise<any> {
+    try {
+      const response$ = this.httpService.post<any>(
+        `${this.baseUrl}/connections/bulk/connect`,
+        { names },
+        {
+          headers: this.getHeaders(),
+        },
+      );
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to connect multiple");
+    }
+  }
+
+  async disconnectMultiple(names: string[]): Promise<any> {
+    try {
+      const response$ = this.httpService.post<any>(
+        `${this.baseUrl}/connections/bulk/disconnect`,
+        { names },
+        {
+          headers: this.getHeaders(),
+        },
+      );
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to disconnect multiple");
+    }
+  }
+
+  async importConnections(connections: ConnectionConfig[], autoConnect: boolean = true): Promise<any> {
+    try {
+      const response$ = this.httpService.post<any>(
+        `${this.baseUrl}/connections/import/json`,
+        { connections, auto_connect: autoConnect },
         { headers: this.getHeaders() },
       );
       const response = await firstValueFrom(response$);
       return response.data;
     } catch (error) {
-      this.handleError(error, 'Failed to get account info');
+      this.handleError(error, "Failed to import connections");
     }
   }
 
-  async getAccountSummary(): Promise<AccountSummary> {
+  async exportConnections(includePasswords: boolean = false): Promise<any> {
     try {
-      const response$ = this.httpService.get<AccountSummary>(
-        `${this.baseUrl}/api/v1/account/summary`,
-        { headers: this.getHeaders() },
-      );
+      const params: Record<string, any> = { include_passwords: includePasswords };
+      const response$ = this.httpService.get<any>(`${this.baseUrl}/connections/export/json`, {
+        headers: this.getHeaders(),
+        params,
+      });
       const response = await firstValueFrom(response$);
       return response.data;
     } catch (error) {
-      this.handleError(error, 'Failed to get account summary');
+      this.handleError(error, "Failed to export connections");
     }
   }
 
-  // Positions endpoints
-  async getAllPositions(): Promise<Position[]> {
+  // ============ Positions Endpoints ============
+  async getAllPositions(connectionName?: string): Promise<Position[]> {
     try {
-      const response$ = this.httpService.get<Position[]>(
-        `${this.baseUrl}/api/v1/positions/`,
-        { headers: this.getHeaders() },
-      );
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<{ positions: Position[] }>(`${this.baseUrl}/positions/`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data.positions;
+    } catch (error) {
+      this.handleError(error, "Failed to get all positions");
+    }
+  }
+
+  async getAllPositionsAllConnections(): Promise<AllPositionsResponse> {
+    try {
+      const response$ = this.httpService.get<AllPositionsResponse>(`${this.baseUrl}/positions/all`, {
+        headers: this.getHeaders(),
+      });
       const response = await firstValueFrom(response$);
       return response.data;
     } catch (error) {
-      this.handleError(error, 'Failed to get all positions');
+      this.handleError(error, "Failed to get all positions across connections");
     }
   }
 
-  async getPositionByTicket(ticket: number): Promise<Position> {
+  async getPositionByTicket(ticket: number, connectionName?: string): Promise<Position> {
     try {
-      const response$ = this.httpService.get<Position>(
-        `${this.baseUrl}/api/v1/positions/${ticket}`,
-        { headers: this.getHeaders() },
-      );
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<Position>(`${this.baseUrl}/positions/${ticket}`, {
+        headers: this.getHeaders(),
+        params,
+      });
       const response = await firstValueFrom(response$);
       return response.data;
     } catch (error) {
@@ -160,61 +462,154 @@ export class MetatraderService {
     }
   }
 
-  async getPositionsBySymbol(symbol: string): Promise<Position[]> {
-    try {
-      const response$ = this.httpService.get<Position[]>(
-        `${this.baseUrl}/api/v1/positions/symbol/${symbol}`,
-        { headers: this.getHeaders() },
-      );
-      const response = await firstValueFrom(response$);
-      return response.data;
-    } catch (error) {
-      this.handleError(error, `Failed to get positions for ${symbol}`);
-    }
-  }
-
-  // Trades endpoints
-  async getCurrentTrades(): Promise<any> {
-    try {
-      const response$ = this.httpService.get<any>(
-        `${this.baseUrl}/api/v1/trades/current`,
-        { headers: this.getHeaders() },
-      );
-      const response = await firstValueFrom(response$);
-      return response.data;
-    } catch (error) {
-      this.handleError(error, 'Failed to get current trades');
-    }
-  }
-
-  async getTradeHistory(
-    fromDate?: string,
-    toDate?: string,
-  ): Promise<TradeHistoryResponse> {
+  async getPositionsBySymbol(symbol: string, connectionName?: string): Promise<Position[]> {
     try {
       const params: Record<string, string> = {};
-      if (fromDate) params.from_date = fromDate;
-      if (toDate) params.to_date = toDate;
+      if (connectionName) params.connection_name = connectionName;
 
-      const response$ = this.httpService.get<TradeHistoryResponse>(
-        `${this.baseUrl}/api/v1/trades/history`,
+      const response$ = this.httpService.get<{ positions: Position[] }>(
+        `${this.baseUrl}/positions/symbol/${symbol}`,
         {
           headers: this.getHeaders(),
           params,
         },
       );
       const response = await firstValueFrom(response$);
-      return response.data;
+      return response.data.positions;
     } catch (error) {
-      this.handleError(error, 'Failed to get trade history');
+      this.handleError(error, `Failed to get positions for ${symbol}`);
     }
   }
 
-  // Observable versions for real-time updates
-  getAccountInfoStream(): Observable<AccountInfo> {
-    return this.httpService
-      .get<AccountInfo>(`${this.baseUrl}/api/v1/account/info`, {
+  async getPositionsBySymbolAllConnections(symbol: string): Promise<PositionsBySymbolResponse> {
+    try {
+      const response$ = this.httpService.get<PositionsBySymbolResponse>(
+        `${this.baseUrl}/positions/symbol/${symbol}/all`,
+        { headers: this.getHeaders() },
+      );
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to get positions for ${symbol} across connections`);
+    }
+  }
+
+  async closePosition(ticket: number, volume?: number, connectionName?: string): Promise<any> {
+    try {
+      const params: Record<string, any> = {};
+      if (volume) params.volume = volume;
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.delete<any>(`${this.baseUrl}/positions/${ticket}`, {
         headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to close position ${ticket}`);
+    }
+  }
+
+  // ============ Trade Endpoints ============
+  async getTradeHistory(days: number = 7, connectionName?: string): Promise<TradeHistoryResponse> {
+    try {
+      const params: Record<string, any> = { days };
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<TradeHistoryResponse>(`${this.baseUrl}/trade/history`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get trade history");
+    }
+  }
+
+  async getCurrentState(connectionName?: string): Promise<CurrentStateResponse> {
+    try {
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<CurrentStateResponse>(`${this.baseUrl}/trade/state`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get current state");
+    }
+  }
+
+  async placeOrder(orderData: PlaceOrderRequest): Promise<PlaceOrderResponse> {
+    try {
+      const { symbol, order_type, volume, price, sl, tp, connection_name } = orderData;
+      const params: Record<string, any> = {
+        symbol,
+        order_type,
+        volume,
+      };
+
+      if (price) params.price = price;
+      if (sl) params.sl = sl;
+      if (tp) params.tp = tp;
+      if (connection_name) params.connection_name = connection_name;
+
+      const response$ = this.httpService.post<PlaceOrderResponse>(`${this.baseUrl}/trade/order`, null, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to place order");
+    }
+  }
+
+  async getAvailableSymbols(connectionName?: string): Promise<AvailableSymbolsResponse> {
+    try {
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<AvailableSymbolsResponse>(`${this.baseUrl}/trade/symbols`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "Failed to get available symbols");
+    }
+  }
+
+  async getSymbolInfo(symbol: string, connectionName?: string): Promise<SymbolInfo> {
+    try {
+      const params: Record<string, string> = {};
+      if (connectionName) params.connection_name = connectionName;
+
+      const response$ = this.httpService.get<SymbolInfo>(`${this.baseUrl}/trade/symbol/${symbol}/info`, {
+        headers: this.getHeaders(),
+        params,
+      });
+      const response = await firstValueFrom(response$);
+      return response.data;
+    } catch (error) {
+      this.handleError(error, `Failed to get symbol info for ${symbol}`);
+    }
+  }
+
+  // ============ Stream Endpoints ============
+  getAccountInfoStream(connectionName?: string): Observable<AccountInfo> {
+    const params: Record<string, string> = {};
+    if (connectionName) params.connection_name = connectionName;
+
+    return this.httpService
+      .get<AccountInfo>(`${this.baseUrl}/account/info`, {
+        headers: this.getHeaders(),
+        params,
       })
       .pipe(
         map((response: AxiosResponse<AccountInfo>) => response.data),
@@ -222,30 +617,28 @@ export class MetatraderService {
           this.logger.error(`Stream error for account info: ${error.message}`);
           return throwError(
             () =>
-              new HttpException(
-                error.message,
-                error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR,
-              ),
+              new HttpException(error.message, error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR),
           );
         }),
       );
   }
 
-  getPositionsStream(): Observable<Position[]> {
+  getPositionsStream(connectionName?: string): Observable<Position[]> {
+    const params: Record<string, string> = {};
+    if (connectionName) params.connection_name = connectionName;
+
     return this.httpService
-      .get<Position[]>(`${this.baseUrl}/api/v1/positions/`, {
+      .get<{ positions: Position[] }>(`${this.baseUrl}/positions/`, {
         headers: this.getHeaders(),
+        params,
       })
       .pipe(
-        map((response: AxiosResponse<Position[]>) => response.data),
+        map((response: AxiosResponse<{ positions: Position[] }>) => response.data.positions),
         catchError((error: AxiosError) => {
           this.logger.error(`Stream error for positions: ${error.message}`);
           return throwError(
             () =>
-              new HttpException(
-                error.message,
-                error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR,
-              ),
+              new HttpException(error.message, error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR),
           );
         }),
       );
