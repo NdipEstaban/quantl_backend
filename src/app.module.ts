@@ -9,6 +9,7 @@ import { UserModule } from "./user/user.module";
 import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { CustomCacheModule } from "./cache/cache.module";
+import { TradingAccountModule } from "./trading-account/trading-account.module";
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { CustomCacheModule } from "./cache/cache.module";
     MetatraderModule,
     AuthModule,
     UserModule,
+    TradingAccountModule,
   ],
   controllers: [AppController],
   providers: [AppService],

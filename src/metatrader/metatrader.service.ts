@@ -10,7 +10,6 @@ import {
   AccountSummary,
   AllAccountsSummary,
   ConnectionStatus,
-  ConnectionConfig,
   ConnectionTestResult,
   ConnectionStats,
 } from "./interfaces/account.interface";
@@ -23,6 +22,7 @@ import {
   SymbolInfo,
   AvailableSymbolsResponse,
 } from "./interfaces/trade.interface";
+import { ConnectionConfigDto } from "./dto/metatrader.dto";
 
 @Injectable()
 export class MetatraderService {
@@ -112,16 +112,6 @@ export class MetatraderService {
     }
   }
 
-  async fullHealthCheck(): Promise<any> {
-    try {
-      const response$ = this.httpService.get<any>(`${this.baseUrl}/health/full`);
-      const response = await firstValueFrom(response$);
-      return response.data;
-    } catch (error) {
-      this.handleError(error, "Full health check failed");
-    }
-  }
-
   // ============ Account Endpoints ============
   async getAccountInfo(connectionName?: string): Promise<AccountInfo> {
     try {
@@ -184,7 +174,7 @@ export class MetatraderService {
   }
 
   // ============ Connection Management Endpoints ============
-  async createConnection(config: ConnectionConfig): Promise<any> {
+  async createConnection(config: ConnectionConfigDto): Promise<any> {
     try {
       const response$ = this.httpService.post<any>(`${this.baseUrl}/connections/`, config, {
         headers: this.getHeaders(),
@@ -196,7 +186,7 @@ export class MetatraderService {
     }
   }
 
-  async testConnection(config: ConnectionConfig): Promise<ConnectionTestResult> {
+  async testConnection(config: ConnectionConfigDto): Promise<ConnectionTestResult> {
     try {
       const response$ = this.httpService.post<ConnectionTestResult>(
         `${this.baseUrl}/connections/test`,
@@ -389,7 +379,7 @@ export class MetatraderService {
     }
   }
 
-  async importConnections(connections: ConnectionConfig[], autoConnect: boolean = true): Promise<any> {
+  async importConnections(connections: ConnectionConfigDto[], autoConnect: boolean = true): Promise<any> {
     try {
       const response$ = this.httpService.post<any>(
         `${this.baseUrl}/connections/import/json`,
@@ -599,48 +589,5 @@ export class MetatraderService {
     } catch (error) {
       this.handleError(error, `Failed to get symbol info for ${symbol}`);
     }
-  }
-
-  // ============ Stream Endpoints ============
-  getAccountInfoStream(connectionName?: string): Observable<AccountInfo> {
-    const params: Record<string, string> = {};
-    if (connectionName) params.connection_name = connectionName;
-
-    return this.httpService
-      .get<AccountInfo>(`${this.baseUrl}/account/info`, {
-        headers: this.getHeaders(),
-        params,
-      })
-      .pipe(
-        map((response: AxiosResponse<AccountInfo>) => response.data),
-        catchError((error: AxiosError) => {
-          this.logger.error(`Stream error for account info: ${error.message}`);
-          return throwError(
-            () =>
-              new HttpException(error.message, error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR),
-          );
-        }),
-      );
-  }
-
-  getPositionsStream(connectionName?: string): Observable<Position[]> {
-    const params: Record<string, string> = {};
-    if (connectionName) params.connection_name = connectionName;
-
-    return this.httpService
-      .get<{ positions: Position[] }>(`${this.baseUrl}/positions/`, {
-        headers: this.getHeaders(),
-        params,
-      })
-      .pipe(
-        map((response: AxiosResponse<{ positions: Position[] }>) => response.data.positions),
-        catchError((error: AxiosError) => {
-          this.logger.error(`Stream error for positions: ${error.message}`);
-          return throwError(
-            () =>
-              new HttpException(error.message, error.response?.status || HttpStatus.INTERNAL_SERVER_ERROR),
-          );
-        }),
-      );
   }
 }

@@ -1,9 +1,9 @@
 // src/metatrader/metatrader.module.ts
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { HttpModule } from '@nestjs/axios';
-import { MetatraderController } from './metatrader.controller';
-import { MetatraderService } from './metatrader.service';
-import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from "@nestjs/config";
+import { HttpModule } from "@nestjs/axios";
+import { MetatraderController } from "./metatrader.controller";
+import { MetatraderService } from "./metatrader.service";
+import { Module } from "@nestjs/common";
 
 @Module({
   imports: [

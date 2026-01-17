@@ -70,6 +70,11 @@ export class ConnectionConfigDto {
   @ApiProperty({ description: "Unique name for the connection" })
   @IsString()
   @IsNotEmpty()
+  userId: string;
+
+  @ApiProperty({ description: "Unique name for the connection" })
+  @IsString()
+  @IsNotEmpty()
   name: string;
 
   @ApiProperty({ description: "MT5 account number" })

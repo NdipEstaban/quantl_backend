@@ -1,14 +1,20 @@
+import {
+  DEFAULT_CACHE_TTL,
+  METATRADER_CONNECTION_ENTRY,
+  TRADING_ACCOUNT_ENTRY,
+} from "@/cache/cache-keys.constants";
 import { CacheService } from "@/cache/cache.service";
-import { ConnectionConfig, ConnectionTestResult } from "@/metatrader/interfaces/account.interface";
 import { MetatraderService } from "@/metatrader/metatrader.service";
 import { PrismaService } from "@/prisma.service";
 import { Injectable } from "@nestjs/common";
-import { OrderSide, OrderStatus, OrderType } from "@prisma/client";
+import { OrderSide, OrderStatus, OrderType, TradingAccount } from "@prisma/client";
 import { randomUUID } from "crypto";
 import * as crypto from "crypto";
+import { ConnectionConfigDto } from "@/metatrader/dto/metatrader.dto";
+import { UpdateAccountDto } from "./dtos/trading-account.dto";
 
 @Injectable()
-export class TradeAccountService {
+export class TradingAccountService {
   // Encryption configuration
   private readonly ENCRYPTION_KEY = Buffer.from(
     process.env.PASSWORD_ENCRYPTION_KEY || "your-32-byte-encryption-key-here",
@@ -24,38 +30,22 @@ export class TradeAccountService {
     private metatraderService: MetatraderService,
   ) {}
 
-  private async encryptPassword(plainPassword: string): Promise<string> {
-    const iv = crypto.randomBytes(this.IV_LENGTH);
-    const cipher = crypto.createCipheriv(this.ALGORITHM, this.ENCRYPTION_KEY, iv);
-
-    let encrypted = cipher.update(plainPassword, "utf8", "hex");
-    encrypted += cipher.final("hex");
-    const authTag = cipher.getAuthTag();
-
-    return iv.toString("hex") + ":" + authTag.toString("hex") + ":" + encrypted;
+  async getConnectedAccounts(userId: string): Promise<TradingAccount[]> {
+    const cacheKey = `connected_accounts:${userId}`;
+    return this.cacheService.wrap(
+      cacheKey,
+      () =>
+        this.prisma.tradingAccount.findMany({
+          where: {
+            userId,
+            deleted: false,
+          },
+        }),
+      24 * 60 * 60 * 1000, //24hours
+    );
   }
 
-  private async decryptPassword(encryptedPassword: string): Promise<string> {
-    const parts = encryptedPassword.split(":");
-    if (parts.length !== 3) {
-      throw new Error("Invalid encrypted password format");
-    }
-
-    const iv = Buffer.from(parts[0], "hex");
-    const authTag = Buffer.from(parts[1], "hex");
-    const encrypted = parts[2];
-
-    const decipher = crypto.createDecipheriv(this.ALGORITHM, this.ENCRYPTION_KEY, iv);
-
-    decipher.setAuthTag(authTag);
-
-    let decrypted = decipher.update(encrypted, "hex", "utf8");
-    decrypted += decipher.final("utf8");
-
-    return decrypted;
-  }
-
-  async synchronizeMetatraderAccount(accountInfo: ConnectionConfig): Promise<any> {
+  async connectMetatraderAccount(accountInfo: ConnectionConfigDto) {
     const connectionName = randomUUID();
     accountInfo.name = connectionName;
 
@@ -63,8 +53,12 @@ export class TradeAccountService {
     const testConnection = await this.metatraderService.testConnection(accountInfo);
 
     // Check if the user entered an investor password
-    if (testConnection.success && testConnection.account_info?.is_investor_password == true) {
-      return testConnection;
+    if (!testConnection?.success) {
+      throw new Error("Failed to connect to MT5 account");
+    }
+
+    if (testConnection.account_info?.is_investor_password == false) {
+      throw new Error("Please provide an investor password to connect the account");
     }
 
     // Create connection
@@ -73,17 +67,11 @@ export class TradeAccountService {
       throw new Error("Failed to create MT5 connection");
     }
 
-    // Cache the connection name
-    this.cacheService.set(`mt5_connection_name:${accountInfo.userId}`, connectionName);
-
     // Get account info and create trading account in db
     const accountData = await this.metatraderService.getAccountInfo(connectionName);
-    if (!accountData) {
-      throw new Error("Failed to fetch account information from MT5");
-    }
 
     // Encrypt the investor password
-    const encryptedPassword = await this.encryptPassword(accountInfo.password);
+    const encryptedPassword = this.encryptPassword(accountInfo.password);
 
     // Determine if this is a demo account
     const isDemo =
@@ -105,7 +93,7 @@ export class TradeAccountService {
     };
 
     // Create or update trading account in db
-    const tradingAccount = await this.prisma.tradingAccount.upsert({
+    const newTradingAccount = await this.prisma.tradingAccount.upsert({
       where: {
         userId_platform_accountIdentifier: {
           userId: accountInfo.userId,
@@ -129,6 +117,7 @@ export class TradeAccountService {
         lastSyncAt: new Date(),
         syncError: null,
         updatedAt: new Date(),
+        deleted: false,
       },
       create: {
         platform: "MT5",
@@ -152,216 +141,331 @@ export class TradeAccountService {
       },
     });
 
-    const tradingAccountId = tradingAccount.id;
+    // Cache the connection name
+    await this.cacheService.set(METATRADER_CONNECTION_ENTRY + newTradingAccount.id, connectionName);
+  }
 
-    // Clear the plain password from memory for security
-    accountInfo.password = "";
+  async disconnectAccount(tradingAccountId: string): Promise<void> {
+    const tradingAccount = await this.cacheService.wrap<TradingAccount | null>(
+      TRADING_ACCOUNT_ENTRY + tradingAccountId,
+      () => this.prisma.tradingAccount.findUnique({ where: { id: tradingAccountId } }),
+      DEFAULT_CACHE_TTL,
+    );
 
-    // Fetch trade history (deals and orders) for the last 30 days
-    const tradeHistory = await this.metatraderService.getTradeHistory(30, connectionName);
-    let numberOfTrades = 0;
-    if (tradeHistory && tradeHistory.deals) {
-      // Store trades in db
-      const dealPromises = tradeHistory.deals.map(async (deal) => {
-        // Determine entry type from MT5 entry field
-        let entryType = null;
-
-        if (deal.entry === 0) entryType = "IN";
-        else if (deal.entry === 1) entryType = "OUT";
-        else if (deal.entry === 2) entryType = "IN_OUT";
-
-        if (entryType != "IN") numberOfTrades++;
-
-        await this.prisma.deal.upsert({
-          where: {
-            tradingAccountId_externalId: {
-              tradingAccountId,
-              externalId: deal.ticket.toString(),
-            },
-          },
-
-          update: {
-            // values that can change over time
-            profit: deal.profit,
-            swap: deal.swap,
-            commission: deal.commission,
-            fee: deal.fee,
-            comment: deal.comment,
-            updatedAt: new Date(),
-          },
-
-          create: {
-            tradingAccountId,
-
-            // identity
-            externalId: deal.ticket.toString(),
-            orderExternalId: deal.order ? deal.order.toString() : null,
-            positionExternalId: deal.position_id ? deal.position_id.toString() : null,
-
-            // trade data
-            symbol: deal.symbol,
-            volume: deal.volume,
-            price: deal.price,
-            profit: deal.profit,
-            time: new Date(deal.time),
-            side: deal.type === 1 ? "LONG" : "SHORT",
-            entryType: entryType,
-            // fees
-            swap: deal.swap ?? 0,
-            commission: deal.commission ?? 0,
-            fee: deal.fee ?? 0,
-
-            // misc
-            comment: deal.comment,
-
-            platformData: {
-              ticket: deal.ticket,
-              mt5ExternalId: deal.external_id,
-              magic: deal.magic,
-              reason: deal.reason,
-              type: deal.type,
-              entry: deal.entry,
-            },
-          },
-        });
+    if (tradingAccount) {
+      await this.prisma.tradingAccount.update({
+        where: { id: tradingAccountId },
+        data: { deleted: true },
       });
+    }
+  }
 
-      // Execute all promises in parallel
-      try {
-        await Promise.all(dealPromises);
-        console.log(`Successfully upserted ${dealPromises.length} deals`);
-      } catch (error) {
-        console.error("Error upserting deals:", error);
-        throw error;
-      }
+  async syncAllAccounts(userId: string): Promise<any> {
+    const tradingAccounts = await this.prisma.tradingAccount.findMany({
+      where: {
+        userId,
+      },
+    });
+
+    const syncAccounts = [];
+
+    for (const account of tradingAccounts) {
+      syncAccounts.push(this.synchronizeMetatraderAccount(account.id));
     }
 
-    if (tradeHistory && tradeHistory.orders) {
-      // Create an array of upsert promises
-      const upsertPromises = tradeHistory.orders.map(async (order) => {
-        // Map MT5 order type to your OrderType enum
-        const orderTypeMap: Record<number, OrderType> = {
-          0: "MARKET", // ORDER_TYPE_BUY
-          1: "MARKET", // ORDER_TYPE_SELL
-          2: "LIMIT", // ORDER_TYPE_BUY_LIMIT
-          3: "LIMIT", // ORDER_TYPE_SELL_LIMIT
-          4: "STOP", // ORDER_TYPE_BUY_STOP
-          5: "STOP", // ORDER_TYPE_SELL_STOP
-          6: "STOP_LIMIT", // ORDER_TYPE_BUY_STOP_LIMIT
-          7: "STOP_LIMIT", // ORDER_TYPE_SELL_STOP_LIMIT
-        };
-
-        const orderStatusMap: Record<number, OrderStatus> = {
-          0: "OPEN",
-          1: "OPEN",
-          2: "CANCELED",
-          3: "PARTIALLY_FILLED",
-          4: "FILLED",
-          5: "REJECTED",
-          6: "EXPIRED",
-        };
-
-        const side: OrderSide = [0, 2, 4, 6].includes(order.type) ? "LONG" : "SHORT";
-        const volumeFilled = order.volume_initial - (order.volume_current || 0);
-
-        return this.prisma.order.upsert({
-          where: {
-            tradingAccountId_externalId: {
-              tradingAccountId: order.connection,
-              externalId: String(order.ticket),
-            },
-          },
-          create: {
-            externalId: String(order.ticket),
-            tradingAccountId: order.connection,
-            symbol: order.symbol,
-            side: side,
-            orderType: orderTypeMap[order.type] || "MARKET",
-            status: orderStatusMap[order.state] || "PENDING",
-            volumeInitial: order.volume_initial,
-            volumeFilled: volumeFilled,
-            priceOrder: order.price_open || null,
-            priceFilled: order.price_current || null,
-            stopLoss: order.sl || 0,
-            takeProfit: order.tp || 0,
-            timeCreated: new Date(order.time_setup),
-            timeFilled: order.time_done ? new Date(order.time_done) : null,
-            timeExpiry: null,
-            comment: order.comment || null,
-            platformData: {
-              ticket: order.ticket,
-              type: order.type,
-              type_filling: order.type_filling,
-              type_time: order.type_time,
-              state: order.state,
-              magic: order.magic,
-              reason: order.reason,
-              position_id: order.position_id,
-              position_by_id: order.position_by_id,
-              price_stoplimit: order.price_stoplimit,
-              external_id: order.external_id,
-              time_setup_msc: order.time_setup_msc,
-              time_done_msc: order.time_done_msc,
-            },
-          },
-          update: {
-            symbol: order.symbol,
-            side: side,
-            orderType: orderTypeMap[order.type] || "MARKET",
-            status: orderStatusMap[order.state] || "PENDING",
-            volumeInitial: order.volume_initial,
-            volumeFilled: volumeFilled,
-            priceOrder: order.price_open || null,
-            priceFilled: order.price_current || null,
-            stopLoss: order.sl || 0,
-            takeProfit: order.tp || 0,
-            timeFilled: order.time_done ? new Date(order.time_done) : null,
-            comment: order.comment || null,
-            platformData: {
-              ticket: order.ticket,
-              type: order.type,
-              type_filling: order.type_filling,
-              type_time: order.type_time,
-              state: order.state,
-              magic: order.magic,
-              reason: order.reason,
-              position_id: order.position_id,
-              position_by_id: order.position_by_id,
-              price_stoplimit: order.price_stoplimit,
-              external_id: order.external_id,
-              time_setup_msc: order.time_setup_msc,
-              time_done_msc: order.time_done_msc,
-            },
-          },
-        });
-      });
-
-      // Execute all upserts in parallel
-      try {
-        await Promise.all(upsertPromises);
-        console.log(`Successfully upserted ${upsertPromises.length} orders`);
-      } catch (error) {
-        console.error("Error upserting orders:", error);
-        throw error;
-      }
-    }
+    const synchedAccounts = await Promise.all(syncAccounts);
 
     return {
       success: true,
       message: "Account synchronized successfully",
-      tradingAccountId: tradingAccountId,
-      connectionName: connectionName,
-      accountInfo: {
-        login: accountData.login,
-        name: accountData.name,
-        server: accountData.server,
-        balance: accountData.balance,
-        equity: accountData.equity,
-        currency: accountData.currency,
-        freeMargin: accountData.free_margin,
-        leverage: accountData.leverage,
-        numberOfTrades,
-      },
+      synchedAccounts,
     };
+  }
+
+  async updateAccount(accountId: string, data: UpdateAccountDto): Promise<TradingAccount | void> {
+    const tradingAccount = await this.cacheService.wrap<TradingAccount | null>(
+      TRADING_ACCOUNT_ENTRY + accountId,
+      () => this.prisma.tradingAccount.findUnique({ where: { id: accountId } }),
+      DEFAULT_CACHE_TTL,
+    );
+    if (!tradingAccount) {
+      throw new Error("Trading account not found");
+    }
+
+    let connectionName = (await this.cacheService.get(METATRADER_CONNECTION_ENTRY + accountId)) as string;
+    connectionName = connectionName || randomUUID();
+
+    let existingConnection = await this.metatraderService.getConnection(connectionName);
+    existingConnection =
+      existingConnection ||
+      (await this.metatraderService.createConnection({
+        name: connectionName,
+        server: data.server!,
+        login: parseInt(tradingAccount.accountIdentifier),
+        password: data.password!,
+        userId: tradingAccount.userId,
+      }));
+
+    if (existingConnection) {
+      const updateConnection = await this.metatraderService.updateConnection(connectionName, {
+        ...data,
+        name: connectionName,
+      });
+      if (!updateConnection?.success) {
+        throw new Error("Failed to update MT5 connection");
+      }
+      return await this.prisma.tradingAccount.update({
+        where: { id: accountId },
+        data: { ...data },
+      });
+    }
+  }
+
+  async synchronizeMetatraderAccount(tradingAccountId: string): Promise<any> {
+    const connectionName = (await this.cacheService.get(
+      METATRADER_CONNECTION_ENTRY + tradingAccountId,
+    )) as string;
+
+    if (connectionName) {
+      const accountData = await this.metatraderService.getAccountInfo(connectionName);
+
+      // Fetch trade history (deals and orders) for the last 30 days
+      const tradeHistory = await this.metatraderService.getTradeHistory(30, connectionName);
+      let numberOfTrades = 0;
+      if (tradeHistory && tradeHistory.deals) {
+        // Store trades in db
+        const dealPromises = tradeHistory.deals.map(async (deal) => {
+          // Determine entry type from MT5 entry field
+          let entryType = null;
+
+          if (deal.entry === 0) entryType = "IN";
+          else if (deal.entry === 1) entryType = "OUT";
+          else if (deal.entry === 2) entryType = "IN_OUT";
+
+          if (entryType != "IN") numberOfTrades++;
+
+          await this.prisma.deal.upsert({
+            where: {
+              tradingAccountId_externalId: {
+                tradingAccountId,
+                externalId: deal.ticket.toString(),
+              },
+            },
+
+            update: {
+              // values that can change over time
+              profit: deal.profit,
+              swap: deal.swap,
+              commission: deal.commission,
+              fee: deal.fee,
+              comment: deal.comment,
+              updatedAt: new Date(),
+            },
+
+            create: {
+              tradingAccountId,
+
+              // identity
+              externalId: deal.ticket.toString(),
+              orderExternalId: deal.order ? deal.order.toString() : null,
+              positionExternalId: deal.position_id ? deal.position_id.toString() : null,
+
+              // trade data
+              symbol: deal.symbol,
+              volume: deal.volume,
+              price: deal.price,
+              profit: deal.profit,
+              time: new Date(deal.time),
+              side: deal.type === 1 ? "LONG" : "SHORT",
+              entryType: entryType,
+              // fees
+              swap: deal.swap ?? 0,
+              commission: deal.commission ?? 0,
+              fee: deal.fee ?? 0,
+
+              // misc
+              comment: deal.comment,
+
+              platformData: {
+                ticket: deal.ticket,
+                mt5ExternalId: deal.external_id,
+                magic: deal.magic,
+                reason: deal.reason,
+                type: deal.type,
+                entry: deal.entry,
+              },
+            },
+          });
+        });
+
+        // Execute all promises in parallel
+        try {
+          await Promise.all(dealPromises);
+          console.log(`Successfully upserted ${dealPromises.length} deals`);
+        } catch (error) {
+          console.error("Error upserting deals:", error);
+          throw error;
+        }
+      }
+
+      if (tradeHistory && tradeHistory.orders) {
+        // Create an array of upsert promises
+        const upsertPromises = tradeHistory.orders.map(async (order) => {
+          // Map MT5 order type to your OrderType enum
+          const orderTypeMap: Record<number, OrderType> = {
+            0: "MARKET", // ORDER_TYPE_BUY
+            1: "MARKET", // ORDER_TYPE_SELL
+            2: "LIMIT", // ORDER_TYPE_BUY_LIMIT
+            3: "LIMIT", // ORDER_TYPE_SELL_LIMIT
+            4: "STOP", // ORDER_TYPE_BUY_STOP
+            5: "STOP", // ORDER_TYPE_SELL_STOP
+            6: "STOP_LIMIT", // ORDER_TYPE_BUY_STOP_LIMIT
+            7: "STOP_LIMIT", // ORDER_TYPE_SELL_STOP_LIMIT
+          };
+
+          const orderStatusMap: Record<number, OrderStatus> = {
+            0: "OPEN",
+            1: "OPEN",
+            2: "CANCELED",
+            3: "PARTIALLY_FILLED",
+            4: "FILLED",
+            5: "REJECTED",
+            6: "EXPIRED",
+          };
+
+          const side: OrderSide = [0, 2, 4, 6].includes(order.type) ? "LONG" : "SHORT";
+          const volumeFilled = order.volume_initial - (order.volume_current || 0);
+
+          return this.prisma.order.upsert({
+            where: {
+              tradingAccountId_externalId: {
+                tradingAccountId: order.connection,
+                externalId: String(order.ticket),
+              },
+            },
+            create: {
+              externalId: String(order.ticket),
+              tradingAccountId: order.connection,
+              symbol: order.symbol,
+              side: side,
+              orderType: orderTypeMap[order.type] || "MARKET",
+              status: orderStatusMap[order.state] || "PENDING",
+              volumeInitial: order.volume_initial,
+              volumeFilled: volumeFilled,
+              priceOrder: order.price_open || null,
+              priceFilled: order.price_current || null,
+              stopLoss: order.sl || 0,
+              takeProfit: order.tp || 0,
+              timeCreated: new Date(order.time_setup),
+              timeFilled: order.time_done ? new Date(order.time_done) : null,
+              timeExpiry: null,
+              comment: order.comment || null,
+              platformData: {
+                ticket: order.ticket,
+                type: order.type,
+                type_filling: order.type_filling,
+                type_time: order.type_time,
+                state: order.state,
+                magic: order.magic,
+                reason: order.reason,
+                position_id: order.position_id,
+                position_by_id: order.position_by_id,
+                price_stoplimit: order.price_stoplimit,
+                external_id: order.external_id,
+                time_setup_msc: order.time_setup_msc,
+                time_done_msc: order.time_done_msc,
+              },
+            },
+            update: {
+              symbol: order.symbol,
+              side: side,
+              orderType: orderTypeMap[order.type] || "MARKET",
+              status: orderStatusMap[order.state] || "PENDING",
+              volumeInitial: order.volume_initial,
+              volumeFilled: volumeFilled,
+              priceOrder: order.price_open || null,
+              priceFilled: order.price_current || null,
+              stopLoss: order.sl || 0,
+              takeProfit: order.tp || 0,
+              timeFilled: order.time_done ? new Date(order.time_done) : null,
+              comment: order.comment || null,
+              platformData: {
+                ticket: order.ticket,
+                type: order.type,
+                type_filling: order.type_filling,
+                type_time: order.type_time,
+                state: order.state,
+                magic: order.magic,
+                reason: order.reason,
+                position_id: order.position_id,
+                position_by_id: order.position_by_id,
+                price_stoplimit: order.price_stoplimit,
+                external_id: order.external_id,
+                time_setup_msc: order.time_setup_msc,
+                time_done_msc: order.time_done_msc,
+              },
+            },
+          });
+        });
+
+        // Execute all upserts in parallel
+        try {
+          await Promise.all(upsertPromises);
+          console.log(`Successfully upserted ${upsertPromises.length} orders`);
+        } catch (error) {
+          console.error("Error upserting orders:", error);
+          throw error;
+        }
+      }
+
+      return {
+        success: true,
+        message: "Account synchronized successfully",
+        tradingAccountId: tradingAccountId,
+        connectionName: connectionName,
+        accountInfo: {
+          login: accountData.login,
+          name: accountData.name,
+          server: accountData.server,
+          balance: accountData.balance,
+          equity: accountData.equity,
+          currency: accountData.currency,
+          freeMargin: accountData.free_margin,
+          leverage: accountData.leverage,
+          numberOfTrades,
+        },
+      };
+    }
+  }
+
+  private encryptPassword(plainPassword: string): string {
+    const iv = crypto.randomBytes(this.IV_LENGTH);
+    const cipher = crypto.createCipheriv(this.ALGORITHM, this.ENCRYPTION_KEY, iv);
+
+    let encrypted = cipher.update(plainPassword, "utf8", "hex");
+    encrypted += cipher.final("hex");
+    const authTag = cipher.getAuthTag();
+
+    return iv.toString("hex") + ":" + authTag.toString("hex") + ":" + encrypted;
+  }
+
+  private decryptPassword(encryptedPassword: string): string {
+    const parts = encryptedPassword.split(":");
+    if (parts.length !== 3) {
+      throw new Error("Invalid encrypted password format");
+    }
+
+    const iv = Buffer.from(parts[0], "hex");
+    const authTag = Buffer.from(parts[1], "hex");
+    const encrypted = parts[2];
+
+    const decipher = crypto.createDecipheriv(this.ALGORITHM, this.ENCRYPTION_KEY, iv);
+
+    decipher.setAuthTag(authTag);
+
+    let decrypted = decipher.update(encrypted, "hex", "utf8");
+    decrypted += decipher.final("utf8");
+
+    return decrypted;
   }
 }

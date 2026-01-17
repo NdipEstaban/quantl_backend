@@ -71,7 +71,7 @@ export interface ConnectionConfig {
   login: number;
   password: string;
   server: string;
-  userId:string;
+  userId: string;
   path?: string;
   timeout?: number;
   portable?: boolean;
@@ -90,8 +90,8 @@ export interface ConnectionTestResult {
     currency: string;
     server: string;
     company: string;
-    is_investor_password:boolean;
-    trade_allowed:boolean;
+    is_investor_password: boolean;
+    trade_allowed: boolean;
   };
 }
 

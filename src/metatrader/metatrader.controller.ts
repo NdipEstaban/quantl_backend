@@ -53,14 +53,6 @@ export class MetatraderController {
     return this.metatraderService.checkMetatraderHealth(query.connection_name);
   }
 
-  @Get("health/full")
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: "Full health check including all connections" })
-  @ApiResponse({ status: 200, description: "Full health status" })
-  async fullHealthCheck(): Promise<any> {
-    return this.metatraderService.fullHealthCheck();
-  }
-
   // ============ Account Endpoints ============
   @Get("account/info")
   @HttpCode(HttpStatus.OK)
@@ -351,26 +343,5 @@ export class MetatraderController {
   @ApiResponse({ status: 200, description: "Symbol info retrieved successfully" })
   async getSymbolInfo(@Param("symbol") symbol: string, @Query() query: ConnectionNameQueryDto) {
     return this.metatraderService.getSymbolInfo(symbol, query.connection_name);
-  }
-
-  // ============ Stream Endpoints ============
-  @Get("account/stream")
-  @Header("Content-Type", "text/event-stream")
-  @Header("Cache-Control", "no-cache")
-  @Header("Connection", "keep-alive")
-  @ApiOperation({ summary: "Stream real-time account information (SSE)" })
-  @ApiQuery({ name: "connection_name", required: false, type: String })
-  accountStream(@Query() query: ConnectionNameQueryDto) {
-    return this.metatraderService.getAccountInfoStream(query.connection_name);
-  }
-
-  @Get("positions/stream")
-  @Header("Content-Type", "text/event-stream")
-  @Header("Cache-Control", "no-cache")
-  @Header("Connection", "keep-alive")
-  @ApiOperation({ summary: "Stream real-time positions (SSE)" })
-  @ApiQuery({ name: "connection_name", required: false, type: String })
-  positionsStream(@Query() query: ConnectionNameQueryDto) {
-    return this.metatraderService.getPositionsStream(query.connection_name);
   }
 }
