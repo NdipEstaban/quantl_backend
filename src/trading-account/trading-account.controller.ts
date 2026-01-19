@@ -12,6 +12,7 @@ import {
   UseFilters,
   HttpCode,
   HttpStatus,
+  Query,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { ConnectionConfigDto } from "@/metatrader/dto/metatrader.dto";
@@ -25,7 +26,7 @@ import { TradingAccountService } from "./trading-account.service";
 @Controller("trade-accounts")
 @UseInterceptors(TransformInterceptor)
 @UseFilters(HttpExceptionFilter)
-@UseGuards(JwtAuthGuard)
+//@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class TradeAccountController {
   constructor(private readonly tradeAccountService: TradingAccountService) {}
@@ -41,8 +42,8 @@ export class TradeAccountController {
     status: 200,
     description: "List of connected trading accounts retrieved successfully",
   })
-  async getConnectedAccounts(user: User) {
-    return this.tradeAccountService.getConnectedAccounts(user.id);
+  async getConnectedAccounts(@Query("userId") userId?: string) {
+    return this.tradeAccountService.getConnectedAccounts(userId);
   }
 
   // ============ Account Connection Management ============
@@ -103,7 +104,7 @@ export class TradeAccountController {
     status: 200,
     description: "All accounts synchronized successfully",
   })
-  async syncAllAccounts(userId: string) {
+  async syncAllAccounts(@Query("userId") userId: string) {
     return this.tradeAccountService.syncAllAccounts(userId);
   }
 

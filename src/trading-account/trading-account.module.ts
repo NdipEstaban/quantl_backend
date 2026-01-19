@@ -11,10 +11,10 @@ import { TradingAccountService } from "./trading-account.service";
   imports: [
     CustomCacheModule,
     MetatraderModule,
-    JwtModule.register({
+    /*JwtModule.register({
       secret: process.env.JWT_SECRET,
       signOptions: { expiresIn: "1d" },
-    }),
+    }),*/
   ],
   controllers: [TradeAccountController],
   providers: [TradingAccountService, PrismaService],

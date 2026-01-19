@@ -1,7 +1,9 @@
 import {
+  ALL_TRADING_ACCOUNTS_ENTRY,
   DEFAULT_CACHE_TTL,
   METATRADER_CONNECTION_ENTRY,
   TRADING_ACCOUNT_ENTRY,
+  USER_TRADING_ACCOUNTS_ENTRY,
 } from "@/cache/cache-keys.constants";
 import { CacheService } from "@/cache/cache.service";
 import { MetatraderService } from "@/metatrader/metatrader.service";
@@ -12,14 +14,15 @@ import { randomUUID } from "crypto";
 import * as crypto from "crypto";
 import { ConnectionConfigDto } from "@/metatrader/dto/metatrader.dto";
 import { UpdateAccountDto } from "./dtos/trading-account.dto";
+import cleanObject from "@/common/clean-objects";
 
 @Injectable()
 export class TradingAccountService {
   // Encryption configuration
-  private readonly ENCRYPTION_KEY = Buffer.from(
-    process.env.PASSWORD_ENCRYPTION_KEY || "your-32-byte-encryption-key-here",
-    "hex",
-  );
+  private readonly ENCRYPTION_KEY = crypto
+    .createHash("sha256")
+    .update(process.env.PASSWORD_ENCRYPTION_KEY || "fallback-secret-at-least-32-chars")
+    .digest(); // This ALWAYS returns a 32-byte Buffer
   private readonly ALGORITHM = "aes-256-gcm";
   private readonly IV_LENGTH = 16;
   private readonly AUTH_TAG_LENGTH = 16;
@@ -30,19 +33,34 @@ export class TradingAccountService {
     private metatraderService: MetatraderService,
   ) {}
 
-  async getConnectedAccounts(userId: string): Promise<TradingAccount[]> {
-    const cacheKey = `connected_accounts:${userId}`;
-    return this.cacheService.wrap(
-      cacheKey,
-      () =>
-        this.prisma.tradingAccount.findMany({
-          where: {
-            userId,
-            deleted: false,
-          },
-        }),
-      24 * 60 * 60 * 1000, //24hours
-    );
+  async getConnectedAccounts(userId?: string): Promise<TradingAccount[]> {
+    if (userId) {
+      const cacheKey = USER_TRADING_ACCOUNTS_ENTRY + userId;
+      return this.cacheService.wrap(
+        cacheKey,
+        () =>
+          this.prisma.tradingAccount.findMany({
+            where: {
+              userId,
+              deleted: false,
+            },
+          }),
+        24 * 60 * 60 * 1000, //24hours
+      );
+    } else {
+      const cacheKey = ALL_TRADING_ACCOUNTS_ENTRY;
+      return this.cacheService.wrap(
+        cacheKey,
+        () =>
+          this.prisma.tradingAccount.findMany({
+            where: {
+              userId,
+              deleted: false,
+            },
+          }),
+        24 * 60 * 60 * 1000, //24hours
+      );
+    }
   }
 
   async connectMetatraderAccount(accountInfo: ConnectionConfigDto) {
@@ -192,31 +210,42 @@ export class TradingAccountService {
       throw new Error("Trading account not found");
     }
 
-    let connectionName = (await this.cacheService.get(METATRADER_CONNECTION_ENTRY + accountId)) as string;
-    connectionName = connectionName || randomUUID();
-
-    let existingConnection = await this.metatraderService.getConnection(connectionName);
-    existingConnection =
-      existingConnection ||
-      (await this.metatraderService.createConnection({
-        name: connectionName,
-        server: data.server!,
-        login: parseInt(tradingAccount.accountIdentifier),
-        password: data.password!,
-        userId: tradingAccount.userId,
-      }));
+    const connectionName = (await this.cacheService.get(METATRADER_CONNECTION_ENTRY + accountId)) as string;
+    const existingConnection = await this.metatraderService.getConnection(connectionName);
 
     if (existingConnection) {
       const updateConnection = await this.metatraderService.updateConnection(connectionName, {
-        ...data,
         name: connectionName,
+        ...cleanObject({
+          server: data.server,
+          login: data.accountNumber,
+          password: data.password,
+        }),
       });
+
       if (!updateConnection?.success) {
         throw new Error("Failed to update MT5 connection");
       }
+
+      const connectionConfig = cleanObject({
+        server: data.server,
+        serverAddress: data.server,
+        login: data.accountNumber,
+        encryptedPassword: data.password ? this.encryptPassword(data.password) : undefined,
+        passwordEncryptedAt: data.password ? new Date().toISOString() : undefined,
+        encryptionAlgorithm: data.password ? this.ALGORITHM : undefined,
+        platform: "MT5",
+        lastConnected: new Date().toISOString(),
+      });
+
       return await this.prisma.tradingAccount.update({
         where: { id: accountId },
-        data: { ...data },
+        data: cleanObject({
+          accountName: data.accountName,
+          syncFrequency: data.syncFrequency,
+          isActive: data.isActive,
+          connectionConfig,
+        }),
       });
     }
   }
@@ -339,13 +368,13 @@ export class TradingAccountService {
           return this.prisma.order.upsert({
             where: {
               tradingAccountId_externalId: {
-                tradingAccountId: order.connection,
+                tradingAccountId,
                 externalId: String(order.ticket),
               },
             },
             create: {
               externalId: String(order.ticket),
-              tradingAccountId: order.connection,
+              tradingAccountId,
               symbol: order.symbol,
               side: side,
               orderType: orderTypeMap[order.type] || "MARKET",

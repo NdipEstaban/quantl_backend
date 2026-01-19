@@ -5,6 +5,14 @@ import { IsOptional, IsString, IsNumber, Min } from "class-validator";
 export class UpdateAccountDto {
   @ApiPropertyOptional({
     description: "MT5 server address",
+    example: "155748778457",
+  })
+  @IsOptional()
+  @IsString()
+  accountNumber?: string;
+
+  @ApiPropertyOptional({
+    description: "MT5 server",
     example: "MetaQuotes-Demo",
   })
   @IsOptional()
