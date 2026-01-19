@@ -38,7 +38,7 @@ export class CacheService {
   /**
    * Set data in both cache levels
    */
-  async set<T>(key: string, value: T, ttl?: number): Promise<void> {
+  async set<T>(key: string, value: T, ttl: number = 0): Promise<void> {
     try {
       await this.cacheManager.set(key, value, ttl);
       this.logger.debug(`Cache set for key: ${key}`);
