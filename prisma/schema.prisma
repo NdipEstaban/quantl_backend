@@ -328,12 +328,13 @@ model TradingAccount {
    */
 
   // Account metrics (universal across platforms)
-  balance    Float  @default(0)
-  equity     Float?
-  margin     Float?
-  freeMargin Float?
-  currency   String @default("USD")
-  leverage   Int?
+  balance        Float  @default(0)
+  equity         Float?
+  margin         Float?
+  freeMargin     Float?
+  currency       String @default("USD")
+  leverage       Int?
+  numberOfTrades Int    @default(0)
 
   // Account status
   isActive      Boolean   @default(true)
@@ -416,11 +417,11 @@ model Order {
   orderType     OrderType // "MARKET", "LIMIT", "STOP", "STOP_LIMIT", etc.
   status        OrderStatus // "PENDING", "FILLED", "PARTIALLY_FILLED", "CANCELED", "REJECTED"
   volumeInitial Float
-  volumeFilled  Float     @default(0)
+  volumeFilled  Float       @default(0)
   priceOrder    Float? // Limit/Stop price (null for market orders)
   priceFilled   Float? // Average fill price
-  stopLoss      Float     @default(0)
-  takeProfit    Float     @default(0)
+  stopLoss      Float       @default(0)
+  takeProfit    Float       @default(0)
 
   // Timestamps
   timeCreated DateTime

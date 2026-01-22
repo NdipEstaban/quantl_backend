@@ -1,6 +1,28 @@
 export const DEFAULT_CACHE_TTL = 24 * 60 * 60 * 1000; //24 hours
 
-export const METATRADER_CONNECTION_ENTRY = "metatrader_connection_entry:";
-export const TRADING_ACCOUNT_ENTRY = "trading_account:";
-export const USER_TRADING_ACCOUNTS_ENTRY = "user_trading_accounts:";
-export const ALL_TRADING_ACCOUNTS_ENTRY = "all_trading_accounts";
+export const CacheKeys = {
+  // MetaTrader connection
+  metatraderConnection: (connectionId: string) => `metatrader_connection_entry:${connectionId}`,
+
+  // All trading accounts (static key)
+  allTradingAccounts: () => "all_trading_accounts",
+
+  // Trading account specific
+  tradingAccount: (accountId: string) => `trading_account:${accountId}`,
+
+  numberOfTrades: (accountId: string) => `trading_account:${accountId}:number_of_trades`,
+
+  // User specific
+  user: (userId: string) => `user:${userId}`,
+
+  userTradingAccounts: (userId: string) => `user:trading_accounts:${userId}`,
+
+  // Wildcard patterns for invalidation
+  allUserTradingAccounts: (userId: string) => `user:trading_accounts:${userId}*`,
+
+  allUserData: (userId: string) => `user:${userId}*`,
+
+  allTradingAccountData: (accountId: string) => `trading_account:${accountId}*`,
+};
+
+export default CacheKeys;

@@ -1,10 +1,4 @@
-import {
-  ALL_TRADING_ACCOUNTS_ENTRY,
-  DEFAULT_CACHE_TTL,
-  METATRADER_CONNECTION_ENTRY,
-  TRADING_ACCOUNT_ENTRY,
-  USER_TRADING_ACCOUNTS_ENTRY,
-} from "@/cache/cache-keys.constants";
+import CacheKeys, { DEFAULT_CACHE_TTL } from "@/cache/cache-keys.constants";
 import { CacheService } from "@/cache/cache.service";
 import { MetatraderService } from "@/metatrader/metatrader.service";
 import { PrismaService } from "@/prisma.service";
@@ -33,10 +27,10 @@ export class TradingAccountService {
     private metatraderService: MetatraderService,
   ) {}
 
-  async getConnectedAccounts(userId?: string): Promise<TradingAccount[]> {
+  async getConnectedAccounts(userId?: string): Promise<any[]> {
     if (userId) {
-      const cacheKey = USER_TRADING_ACCOUNTS_ENTRY + userId;
-      return this.cacheService.wrap(
+      const cacheKey = CacheKeys.userTradingAccounts(userId);
+      const tradingAccounts = await this.cacheService.wrap(
         cacheKey,
         () =>
           this.prisma.tradingAccount.findMany({
@@ -44,11 +38,25 @@ export class TradingAccountService {
               userId,
               deleted: false,
             },
+            omit: {
+              connectionConfig: true,
+            },
           }),
         24 * 60 * 60 * 1000, //24hours
       );
+
+      const result: any[] = [];
+      for (const account of tradingAccounts) {
+        const numberOfTrades = await this.cacheService.get<number>(CacheKeys.numberOfTrades(account.id));
+        result.push({
+          ...account,
+          numberOfTrades: numberOfTrades || 0,
+        });
+      }
+
+      return result;
     } else {
-      const cacheKey = ALL_TRADING_ACCOUNTS_ENTRY;
+      const cacheKey = CacheKeys.allTradingAccounts();
       return this.cacheService.wrap(
         cacheKey,
         () =>
@@ -160,12 +168,12 @@ export class TradingAccountService {
     });
 
     // Cache the connection name
-    await this.cacheService.set(METATRADER_CONNECTION_ENTRY + newTradingAccount.id, connectionName);
+    await this.cacheService.set(CacheKeys.metatraderConnection(newTradingAccount.id), connectionName);
   }
 
   async disconnectAccount(tradingAccountId: string): Promise<void> {
     const tradingAccount = await this.cacheService.wrap<TradingAccount | null>(
-      TRADING_ACCOUNT_ENTRY + tradingAccountId,
+      CacheKeys.tradingAccount(tradingAccountId),
       () => this.prisma.tradingAccount.findUnique({ where: { id: tradingAccountId } }),
       DEFAULT_CACHE_TTL,
     );
@@ -202,7 +210,7 @@ export class TradingAccountService {
 
   async updateAccount(accountId: string, data: UpdateAccountDto): Promise<TradingAccount | void> {
     const tradingAccount = await this.cacheService.wrap<TradingAccount | null>(
-      TRADING_ACCOUNT_ENTRY + accountId,
+      CacheKeys.tradingAccount(accountId),
       () => this.prisma.tradingAccount.findUnique({ where: { id: accountId } }),
       DEFAULT_CACHE_TTL,
     );
@@ -210,7 +218,7 @@ export class TradingAccountService {
       throw new Error("Trading account not found");
     }
 
-    const connectionName = (await this.cacheService.get(METATRADER_CONNECTION_ENTRY + accountId)) as string;
+    const connectionName = (await this.cacheService.get(CacheKeys.metatraderConnection(accountId))) as string;
     const existingConnection = await this.metatraderService.getConnection(connectionName);
 
     if (existingConnection) {
@@ -252,207 +260,212 @@ export class TradingAccountService {
 
   async synchronizeMetatraderAccount(tradingAccountId: string): Promise<any> {
     const connectionName = (await this.cacheService.get(
-      METATRADER_CONNECTION_ENTRY + tradingAccountId,
+      CacheKeys.metatraderConnection(tradingAccountId),
     )) as string;
 
     if (connectionName) {
-      const accountData = await this.metatraderService.getAccountInfo(connectionName);
+      try {
+        //Fetch account info
+        const accountData = await this.metatraderService.getAccountInfo(connectionName);
 
-      // Fetch trade history (deals and orders) for the last 30 days
-      const tradeHistory = await this.metatraderService.getTradeHistory(30, connectionName);
-      let numberOfTrades = 0;
-      if (tradeHistory && tradeHistory.deals) {
-        // Store trades in db
-        const dealPromises = tradeHistory.deals.map(async (deal) => {
-          // Determine entry type from MT5 entry field
-          let entryType = null;
+        // Fetch trade history (deals and orders) for the last 30 days
+        const tradeHistory = await this.metatraderService.getTradeHistory(30, connectionName);
+        let numberOfTrades = 0;
 
-          if (deal.entry === 0) entryType = "IN";
-          else if (deal.entry === 1) entryType = "OUT";
-          else if (deal.entry === 2) entryType = "IN_OUT";
+        if (tradeHistory && tradeHistory.deals) {
+          // Store trades in db
+          const dealPromises = tradeHistory.deals.map(async (deal) => {
+            // Determine entry type from MT5 entry field
+            let entryType = null;
 
-          if (entryType != "IN") numberOfTrades++;
+            if (deal.entry === 0) entryType = "IN";
+            else if (deal.entry === 1) entryType = "OUT";
+            else if (deal.entry === 2) entryType = "IN_OUT";
 
-          await this.prisma.deal.upsert({
-            where: {
-              tradingAccountId_externalId: {
+            if (entryType != "IN") numberOfTrades++;
+
+            await this.prisma.deal.upsert({
+              where: {
+                tradingAccountId_externalId: {
+                  tradingAccountId,
+                  externalId: deal.ticket.toString(),
+                },
+              },
+
+              update: {
+                // values that can change over time
+                profit: deal.profit,
+                swap: deal.swap,
+                commission: deal.commission,
+                fee: deal.fee,
+                comment: deal.comment,
+                updatedAt: new Date(),
+              },
+
+              create: {
                 tradingAccountId,
+
+                // identity
                 externalId: deal.ticket.toString(),
+                orderExternalId: deal.order ? deal.order.toString() : null,
+                positionExternalId: deal.position_id ? deal.position_id.toString() : null,
+
+                // trade data
+                symbol: deal.symbol,
+                volume: deal.volume,
+                price: deal.price,
+                profit: deal.profit,
+                time: new Date(deal.time),
+                side: deal.type === 1 ? "LONG" : "SHORT",
+                entryType: entryType,
+                // fees
+                swap: deal.swap ?? 0,
+                commission: deal.commission ?? 0,
+                fee: deal.fee ?? 0,
+
+                // misc
+                comment: deal.comment,
+
+                platformData: {
+                  ticket: deal.ticket,
+                  mt5ExternalId: deal.external_id,
+                  magic: deal.magic,
+                  reason: deal.reason,
+                  type: deal.type,
+                  entry: deal.entry,
+                },
               },
-            },
-
-            update: {
-              // values that can change over time
-              profit: deal.profit,
-              swap: deal.swap,
-              commission: deal.commission,
-              fee: deal.fee,
-              comment: deal.comment,
-              updatedAt: new Date(),
-            },
-
-            create: {
-              tradingAccountId,
-
-              // identity
-              externalId: deal.ticket.toString(),
-              orderExternalId: deal.order ? deal.order.toString() : null,
-              positionExternalId: deal.position_id ? deal.position_id.toString() : null,
-
-              // trade data
-              symbol: deal.symbol,
-              volume: deal.volume,
-              price: deal.price,
-              profit: deal.profit,
-              time: new Date(deal.time),
-              side: deal.type === 1 ? "LONG" : "SHORT",
-              entryType: entryType,
-              // fees
-              swap: deal.swap ?? 0,
-              commission: deal.commission ?? 0,
-              fee: deal.fee ?? 0,
-
-              // misc
-              comment: deal.comment,
-
-              platformData: {
-                ticket: deal.ticket,
-                mt5ExternalId: deal.external_id,
-                magic: deal.magic,
-                reason: deal.reason,
-                type: deal.type,
-                entry: deal.entry,
-              },
-            },
+            });
           });
-        });
 
-        // Execute all promises in parallel
-        try {
+          // Execute all promises in parallel
           await Promise.all(dealPromises);
-          console.log(`Successfully upserted ${dealPromises.length} deals`);
-        } catch (error) {
-          console.error("Error upserting deals:", error);
-          throw error;
         }
-      }
 
-      if (tradeHistory && tradeHistory.orders) {
-        // Create an array of upsert promises
-        const upsertPromises = tradeHistory.orders.map(async (order) => {
-          // Map MT5 order type to your OrderType enum
-          const orderTypeMap: Record<number, OrderType> = {
-            0: "MARKET", // ORDER_TYPE_BUY
-            1: "MARKET", // ORDER_TYPE_SELL
-            2: "LIMIT", // ORDER_TYPE_BUY_LIMIT
-            3: "LIMIT", // ORDER_TYPE_SELL_LIMIT
-            4: "STOP", // ORDER_TYPE_BUY_STOP
-            5: "STOP", // ORDER_TYPE_SELL_STOP
-            6: "STOP_LIMIT", // ORDER_TYPE_BUY_STOP_LIMIT
-            7: "STOP_LIMIT", // ORDER_TYPE_SELL_STOP_LIMIT
-          };
+        if (tradeHistory && tradeHistory.orders) {
+          // Create an array of upsert promises
+          const upsertPromises = tradeHistory.orders.map(async (order) => {
+            // Map MT5 order type to your OrderType enum
+            const orderTypeMap: Record<number, OrderType> = {
+              0: "MARKET", // ORDER_TYPE_BUY
+              1: "MARKET", // ORDER_TYPE_SELL
+              2: "LIMIT", // ORDER_TYPE_BUY_LIMIT
+              3: "LIMIT", // ORDER_TYPE_SELL_LIMIT
+              4: "STOP", // ORDER_TYPE_BUY_STOP
+              5: "STOP", // ORDER_TYPE_SELL_STOP
+              6: "STOP_LIMIT", // ORDER_TYPE_BUY_STOP_LIMIT
+              7: "STOP_LIMIT", // ORDER_TYPE_SELL_STOP_LIMIT
+            };
 
-          const orderStatusMap: Record<number, OrderStatus> = {
-            0: "OPEN",
-            1: "OPEN",
-            2: "CANCELED",
-            3: "PARTIALLY_FILLED",
-            4: "FILLED",
-            5: "REJECTED",
-            6: "EXPIRED",
-          };
+            const orderStatusMap: Record<number, OrderStatus> = {
+              0: "OPEN",
+              1: "OPEN",
+              2: "CANCELED",
+              3: "PARTIALLY_FILLED",
+              4: "FILLED",
+              5: "REJECTED",
+              6: "EXPIRED",
+            };
 
-          const side: OrderSide = [0, 2, 4, 6].includes(order.type) ? "LONG" : "SHORT";
-          const volumeFilled = order.volume_initial - (order.volume_current || 0);
+            const side: OrderSide = [0, 2, 4, 6].includes(order.type) ? "LONG" : "SHORT";
+            const volumeFilled = order.volume_initial - (order.volume_current || 0);
 
-          return this.prisma.order.upsert({
-            where: {
-              tradingAccountId_externalId: {
-                tradingAccountId,
+            return this.prisma.order.upsert({
+              where: {
+                tradingAccountId_externalId: {
+                  tradingAccountId,
+                  externalId: String(order.ticket),
+                },
+              },
+              create: {
                 externalId: String(order.ticket),
+                tradingAccountId,
+                symbol: order.symbol,
+                side: side,
+                orderType: orderTypeMap[order.type] || "MARKET",
+                status: orderStatusMap[order.state] || "PENDING",
+                volumeInitial: order.volume_initial,
+                volumeFilled: volumeFilled,
+                priceOrder: order.price_open || null,
+                priceFilled: order.price_current || null,
+                stopLoss: order.sl || 0,
+                takeProfit: order.tp || 0,
+                timeCreated: new Date(order.time_setup),
+                timeFilled: order.time_done ? new Date(order.time_done) : null,
+                timeExpiry: null,
+                comment: order.comment || null,
+                platformData: {
+                  ticket: order.ticket,
+                  type: order.type,
+                  type_filling: order.type_filling,
+                  type_time: order.type_time,
+                  state: order.state,
+                  magic: order.magic,
+                  reason: order.reason,
+                  position_id: order.position_id,
+                  position_by_id: order.position_by_id,
+                  price_stoplimit: order.price_stoplimit,
+                  external_id: order.external_id,
+                  time_setup_msc: order.time_setup_msc,
+                  time_done_msc: order.time_done_msc,
+                },
               },
-            },
-            create: {
-              externalId: String(order.ticket),
-              tradingAccountId,
-              symbol: order.symbol,
-              side: side,
-              orderType: orderTypeMap[order.type] || "MARKET",
-              status: orderStatusMap[order.state] || "PENDING",
-              volumeInitial: order.volume_initial,
-              volumeFilled: volumeFilled,
-              priceOrder: order.price_open || null,
-              priceFilled: order.price_current || null,
-              stopLoss: order.sl || 0,
-              takeProfit: order.tp || 0,
-              timeCreated: new Date(order.time_setup),
-              timeFilled: order.time_done ? new Date(order.time_done) : null,
-              timeExpiry: null,
-              comment: order.comment || null,
-              platformData: {
-                ticket: order.ticket,
-                type: order.type,
-                type_filling: order.type_filling,
-                type_time: order.type_time,
-                state: order.state,
-                magic: order.magic,
-                reason: order.reason,
-                position_id: order.position_id,
-                position_by_id: order.position_by_id,
-                price_stoplimit: order.price_stoplimit,
-                external_id: order.external_id,
-                time_setup_msc: order.time_setup_msc,
-                time_done_msc: order.time_done_msc,
+              update: {
+                symbol: order.symbol,
+                side: side,
+                orderType: orderTypeMap[order.type] || "MARKET",
+                status: orderStatusMap[order.state] || "PENDING",
+                volumeInitial: order.volume_initial,
+                volumeFilled: volumeFilled,
+                priceOrder: order.price_open || null,
+                priceFilled: order.price_current || null,
+                stopLoss: order.sl || 0,
+                takeProfit: order.tp || 0,
+                timeFilled: order.time_done ? new Date(order.time_done) : null,
+                comment: order.comment || null,
+                platformData: {
+                  ticket: order.ticket,
+                  type: order.type,
+                  type_filling: order.type_filling,
+                  type_time: order.type_time,
+                  state: order.state,
+                  magic: order.magic,
+                  reason: order.reason,
+                  position_id: order.position_id,
+                  position_by_id: order.position_by_id,
+                  price_stoplimit: order.price_stoplimit,
+                  external_id: order.external_id,
+                  time_setup_msc: order.time_setup_msc,
+                  time_done_msc: order.time_done_msc,
+                },
               },
-            },
-            update: {
-              symbol: order.symbol,
-              side: side,
-              orderType: orderTypeMap[order.type] || "MARKET",
-              status: orderStatusMap[order.state] || "PENDING",
-              volumeInitial: order.volume_initial,
-              volumeFilled: volumeFilled,
-              priceOrder: order.price_open || null,
-              priceFilled: order.price_current || null,
-              stopLoss: order.sl || 0,
-              takeProfit: order.tp || 0,
-              timeFilled: order.time_done ? new Date(order.time_done) : null,
-              comment: order.comment || null,
-              platformData: {
-                ticket: order.ticket,
-                type: order.type,
-                type_filling: order.type_filling,
-                type_time: order.type_time,
-                state: order.state,
-                magic: order.magic,
-                reason: order.reason,
-                position_id: order.position_id,
-                position_by_id: order.position_by_id,
-                price_stoplimit: order.price_stoplimit,
-                external_id: order.external_id,
-                time_setup_msc: order.time_setup_msc,
-                time_done_msc: order.time_done_msc,
-              },
-            },
+            });
           });
-        });
 
-        // Execute all upserts in parallel
-        try {
+          // Execute all upserts in parallel
           await Promise.all(upsertPromises);
           console.log(`Successfully upserted ${upsertPromises.length} orders`);
-        } catch (error) {
-          console.error("Error upserting orders:", error);
-          throw error;
         }
-      }
 
-      return {
-        success: true,
-        message: "Account synchronized successfully",
-        tradingAccountId: tradingAccountId,
-        connectionName: connectionName,
-        accountInfo: {
+        //update trading account info
+        await this.prisma.tradingAccount.update({
+          where: { id: tradingAccountId },
+          data: {
+            balance: accountData.balance,
+            equity: accountData.equity,
+            margin: accountData.margin,
+            freeMargin: accountData.free_margin,
+            isActive: accountData.terminal_info?.connected || false,
+            lastSyncAt: new Date(),
+            syncError: null,
+            accountName: accountData.name,
+            currency: accountData.currency,
+            numberOfTrades,
+          },
+        });
+
+        return {
+          id: tradingAccountId,
           login: accountData.login,
           name: accountData.name,
           server: accountData.server,
@@ -462,8 +475,22 @@ export class TradingAccountService {
           freeMargin: accountData.free_margin,
           leverage: accountData.leverage,
           numberOfTrades,
-        },
-      };
+        };
+      } catch (error) {
+        await this.prisma.tradingAccount.update({
+          where: {
+            id: tradingAccountId,
+          },
+          data: {
+            syncError: error,
+          },
+        });
+
+        return {
+          id: tradingAccountId,
+          syncError: error,
+        };
+      }
     }
   }
 

@@ -1,25 +1,74 @@
 // src/cache/cache.service.ts
-import { Injectable, Inject, Logger } from "@nestjs/common";
+import { Injectable, Inject, Logger, OnModuleInit } from "@nestjs/common";
 import { CACHE_MANAGER } from "@nestjs/cache-manager";
 import { Cache } from "cache-manager";
 
 @Injectable()
-export class CacheService {
+export class CacheService implements OnModuleInit {
   private readonly logger = new Logger(CacheService.name);
   private readonly memoryCachePrefix = "memory:";
   private readonly redisCachePrefix = "redis:";
+  private redisClient: any;
+  // Double namespace due to cache-manager + Keyv setup
+  private readonly redisKeyPrefix = "quantl-cache::quantl-cache:";
 
   constructor(@Inject(CACHE_MANAGER) private readonly cacheManager: Cache) {}
 
+  async onModuleInit() {
+    try {
+      const stores = (this.cacheManager as any).stores;
+
+      if (stores && Array.isArray(stores) && stores.length > 1) {
+        this.logger.log(`Found ${stores.length} cache stores`);
+
+        // Access Redis client from the second store (L2 cache)
+        const redisStore = stores[1];
+        this.redisClient = redisStore?._store?._client;
+
+        if (this.redisClient) {
+          // Check if client is already connected
+          if (!this.redisClient.isOpen) {
+            this.logger.log("Redis client is closed, attempting to connect...");
+
+            try {
+              await this.redisClient.connect();
+              this.logger.log("✅ Redis client connected successfully");
+            } catch (connectError) {
+              this.logger.error("Failed to connect Redis client:", connectError);
+              return;
+            }
+          } else {
+            this.logger.log("✅ Redis client already connected");
+          }
+
+          // Test the connection with correct prefix
+          try {
+            const testKeys = await this.redisClient.keys(`${this.redisKeyPrefix}*`);
+            this.logger.log(
+              `Redis test: found ${testKeys?.length || 0} keys with prefix ${this.redisKeyPrefix}`,
+            );
+            if (testKeys?.length > 0) {
+              this.logger.debug(`Sample keys: ${testKeys.slice(0, 3).join(", ")}`);
+            }
+          } catch (testError) {
+            this.logger.error("Redis connection test failed:", testError);
+          }
+        } else {
+          this.logger.error("Could not access Redis client at stores[1]._store._client");
+        }
+      } else {
+        this.logger.error("Expected multi-tier cache stores not found");
+      }
+    } catch (error) {
+      this.logger.error("Error initializing Redis client:", error);
+    }
+  }
+
   /**
    * Get data from cache with two-level strategy
-   * 1. Check memory cache first (L1)
-   * 2. If not found, check Redis cache (L2)
-   * 3. If found in Redis, store in memory cache for future fast access
    */
   async get<T>(key: string): Promise<T | null> {
     try {
-      // Try to get from cache
       const value = await this.cacheManager.get<T>(key);
 
       if (value !== null && value !== undefined) {
@@ -44,7 +93,6 @@ export class CacheService {
       this.logger.debug(`Cache set for key: ${key}`);
     } catch (error) {
       this.logger.error(`Error setting cache for key ${key}:`, error);
-      // Continue without cache if there's an error
     }
   }
 
@@ -73,15 +121,97 @@ export class CacheService {
   }
 
   /**
-   * Get cache keys (for debugging/monitoring)
+   * Ensure Redis client is connected
+   */
+  private async ensureRedisConnected(): Promise<boolean> {
+    if (!this.redisClient) {
+      return false;
+    }
+
+    if (!this.redisClient.isOpen) {
+      try {
+        await this.redisClient.connect();
+        this.logger.debug("Redis client reconnected");
+      } catch (error) {
+        this.logger.error("Failed to reconnect Redis client:", error);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Get cache keys matching a pattern using Redis SCAN
+   * Handles the double namespace prefix automatically
    */
   async keys(pattern?: string): Promise<string[]> {
     try {
-      // Note: This might not work with all cache stores
-      const keys = (await (this.cacheManager.stores as any).keys?.(pattern)) || [];
-      return keys;
+      // Ensure Redis is connected
+      const isConnected = await this.ensureRedisConnected();
+      if (!isConnected) {
+        this.logger.error("Redis client not available or not connected");
+        return [];
+      }
+
+      // Add the double namespace prefix to pattern
+      const searchPattern = pattern ? `${this.redisKeyPrefix}${pattern}` : `${this.redisKeyPrefix}*`;
+
+      this.logger.debug(`Searching Redis with pattern: ${searchPattern}`);
+
+      const foundKeys: string[] = [];
+      let cursor = "0";
+
+      // Use SCAN for non-blocking iteration
+      do {
+        const result = await this.redisClient.scan(cursor, {
+          MATCH: searchPattern,
+          COUNT: 100,
+        });
+
+        cursor = result.cursor.toString();
+        const keys = result.keys;
+
+        if (keys && keys.length > 0) {
+          // Strip the double namespace prefix from results
+          const cleanKeys = keys.map((key: string) => key.replace(this.redisKeyPrefix, ""));
+          foundKeys.push(...cleanKeys);
+          this.logger.debug(`SCAN found ${keys.length} keys (cursor: ${cursor})`);
+        }
+      } while (cursor !== "0");
+
+      this.logger.log(`Found ${foundKeys.length} keys matching pattern: ${pattern || "*"}`);
+
+      return foundKeys;
     } catch (error) {
-      this.logger.error("Error getting cache keys:", error);
+      this.logger.error(`Error scanning keys for pattern ${pattern}:`, error);
+
+      // Fallback to KEYS command
+      try {
+        const isConnected = await this.ensureRedisConnected();
+        if (isConnected && typeof this.redisClient.keys === "function") {
+          this.logger.warn("Falling back to KEYS command (blocking operation)");
+
+          const searchPattern = pattern ? `${this.redisKeyPrefix}${pattern}` : `${this.redisKeyPrefix}*`;
+
+          this.logger.debug(`KEYS command pattern: ${searchPattern}`);
+
+          const keys = await this.redisClient.keys(searchPattern);
+
+          // Strip prefix from results
+          const cleanKeys = (keys || []).map((key: string) => key.replace(this.redisKeyPrefix, ""));
+
+          this.logger.log(`KEYS command found ${cleanKeys.length} keys`);
+          if (cleanKeys.length > 0) {
+            this.logger.debug(`Sample clean keys: ${cleanKeys.slice(0, 3).join(", ")}`);
+          }
+
+          return cleanKeys;
+        }
+      } catch (fallbackError) {
+        this.logger.error("Fallback KEYS command also failed:", fallbackError);
+      }
+
       return [];
     }
   }

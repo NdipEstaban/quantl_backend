@@ -11,7 +11,7 @@ CREATE TYPE "PaymentStatus" AS ENUM ('PENDING', 'SUCCEEDED', 'FAILED');
 CREATE TYPE "VerificationTokenType" AS ENUM ('EMAIL_VERIFY', 'PASSWORD_RESET');
 
 -- CreateEnum
-CREATE TYPE "AuditLogAction" AS ENUM ('LOGIN', 'LOGOUT', 'REGISTER', 'PASSWORD_CHANGE', 'PASSWORD_RESET', 'EMAIL_VERIFY', 'ACCOUNT_LINKED', 'ACCOUNT_UNLINKED', 'TRADING_ACCOUNT_ADDED', 'TRADING_ACCOUNT_REMOVED', 'TRADE_SYNC', 'SUBSCRIPTION_CREATED', 'SUBSCRIPTION_UPDATED', 'SUBSCRIPTION_CANCELED', 'PAYMENT_SUCCEEDED', 'PAYMENT_FAILED');
+CREATE TYPE "AuditLogAction" AS ENUM ('LOGIN', 'LOGOUT', 'REGISTER', 'PASSWORD_CHANGE', 'PASSWORD_RESET', 'EMAIL_VERIFY', 'ACCOUNT_LINKED', 'ACCOUNT_UNLINKED', 'TRADING_ACCOUNT_ADDED', 'TRADING_ACCOUNT_REMOVED', 'TRADE_SYNC', 'SUBSCRIPTION_CREATED', 'SUBSCRIPTION_UPDATED', 'SUBSCRIPTION_CANCELED', 'PAYMENT_SUCCEEDED', 'PAYMENT_FAILED', 'PASSWORD_RESET_REQUEST', 'PROFILE_UPDATE');
 
 -- CreateEnum
 CREATE TYPE "TradingPlatform" AS ENUM ('MT5', 'MT4', 'CTRADER', 'INTERACTIVE_BROKERS', 'BINANCE', 'COINBASE', 'ALPACA', 'TRADINGVIEW', 'ETORO', 'WEBULL', 'TD_AMERITRADE', 'EXNESS', 'OTHER');
@@ -45,10 +45,12 @@ CREATE TABLE "User" (
     "email" TEXT NOT NULL,
     "emailVerified" TIMESTAMP(3),
     "password" TEXT,
+    "hashedRefreshToken" TEXT,
     "imageUrl" TEXT,
     "role" "Role" NOT NULL DEFAULT 'USER',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "lastLoginAt" TIMESTAMP(3),
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -69,6 +71,7 @@ CREATE TABLE "Account" (
     "scope" TEXT,
     "id_token" TEXT,
     "session_state" TEXT,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -83,6 +86,7 @@ CREATE TABLE "Session" (
     "expires" TIMESTAMP(3) NOT NULL,
     "ipAddress" TEXT,
     "userAgent" TEXT,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -97,6 +101,7 @@ CREATE TABLE "VerificationToken" (
     "type" "VerificationTokenType" NOT NULL,
     "expires" TIMESTAMP(3) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "VerificationToken_pkey" PRIMARY KEY ("id")
 );
@@ -110,6 +115,7 @@ CREATE TABLE "AuditLog" (
     "userAgent" TEXT,
     "metadata" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "AuditLog_pkey" PRIMARY KEY ("id")
 );
@@ -131,6 +137,7 @@ CREATE TABLE "Subscription" (
     "trialEnd" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "Subscription_pkey" PRIMARY KEY ("id")
 );
@@ -148,6 +155,7 @@ CREATE TABLE "Payment" (
     "failureReason" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "Payment_pkey" PRIMARY KEY ("id")
 );
@@ -166,6 +174,7 @@ CREATE TABLE "TradingAccount" (
     "freeMargin" DOUBLE PRECISION,
     "currency" TEXT NOT NULL DEFAULT 'USD',
     "leverage" INTEGER,
+    "numberOfTrades" INTEGER NOT NULL DEFAULT 0,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "isDemo" BOOLEAN NOT NULL DEFAULT false,
     "isPaperTrade" BOOLEAN NOT NULL DEFAULT false,
@@ -175,6 +184,7 @@ CREATE TABLE "TradingAccount" (
     "userId" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "TradingAccount_pkey" PRIMARY KEY ("id")
 );
@@ -200,6 +210,7 @@ CREATE TABLE "Deal" (
     "tradingAccountId" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "Deal_pkey" PRIMARY KEY ("id")
 );
@@ -210,8 +221,8 @@ CREATE TABLE "Order" (
     "externalId" TEXT NOT NULL,
     "symbol" TEXT NOT NULL,
     "side" "OrderSide" NOT NULL,
-    "orderType" TEXT NOT NULL,
-    "status" TEXT NOT NULL,
+    "orderType" "OrderType" NOT NULL,
+    "status" "OrderStatus" NOT NULL,
     "volumeInitial" DOUBLE PRECISION NOT NULL,
     "volumeFilled" DOUBLE PRECISION NOT NULL DEFAULT 0,
     "priceOrder" DOUBLE PRECISION,
@@ -226,6 +237,7 @@ CREATE TABLE "Order" (
     "tradingAccountId" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "Order_pkey" PRIMARY KEY ("id")
 );
@@ -253,6 +265,7 @@ CREATE TABLE "Position" (
     "tradingAccountId" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
+    "deleted" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "Position_pkey" PRIMARY KEY ("id")
 );

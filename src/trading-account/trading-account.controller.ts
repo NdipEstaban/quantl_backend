@@ -13,6 +13,7 @@ import {
   HttpCode,
   HttpStatus,
   Query,
+  Patch,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { ConnectionConfigDto } from "@/metatrader/dto/metatrader.dto";
@@ -21,6 +22,10 @@ import { HttpExceptionFilter } from "@/common/filters/http-exception.filter";
 import { JwtAuthGuard } from "@/auth/guards/jwt-auth.guard";
 import { User } from "@prisma/client";
 import { TradingAccountService } from "./trading-account.service";
+import { InvalidateCache } from "@/cache/cache.decorator";
+import { CacheKey } from "@nestjs/cache-manager";
+import CacheKeys from "@/cache/cache-keys.constants";
+import { CacheService } from "@/cache/cache.service";
 
 @ApiTags("Trading Accounts")
 @Controller("trade-accounts")
@@ -29,7 +34,10 @@ import { TradingAccountService } from "./trading-account.service";
 //@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class TradeAccountController {
-  constructor(private readonly tradeAccountService: TradingAccountService) {}
+  constructor(
+    private readonly tradeAccountService: TradingAccountService,
+    private readonly cacheService: CacheService,
+  ) {}
 
   // ============ Account Listing & Retrieval ============
   @Get("connected")
@@ -94,7 +102,7 @@ export class TradeAccountController {
   }
 
   // ============ Account Synchronization ============
-  @Post("sync/all")
+  @Post("sync-all")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Synchronize all user trading accounts",
@@ -104,6 +112,7 @@ export class TradeAccountController {
     status: 200,
     description: "All accounts synchronized successfully",
   })
+  @InvalidateCache((userId: string) => CacheKeys.allUserTradingAccounts(userId))
   async syncAllAccounts(@Query("userId") userId: string) {
     return this.tradeAccountService.syncAllAccounts(userId);
   }
@@ -126,12 +135,13 @@ export class TradeAccountController {
     status: 404,
     description: "Trading account not found",
   })
+  @InvalidateCache((tradingAccountId: string) => CacheKeys.allTradingAccountData(tradingAccountId))
   async synchronizeMetatraderAccount(@Param("accountId") tradingAccountId: string) {
     return this.tradeAccountService.synchronizeMetatraderAccount(tradingAccountId);
   }
 
   // ============ Account Update ============
-  @Put(":accountId")
+  @Patch(":accountId")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: "Update trading account configuration",
