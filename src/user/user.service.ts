@@ -1,9 +1,12 @@
 /* eslint-disable @typescript-eslint/no-redundant-type-constituents */
 // user.service.ts - Extended version
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "@/prisma.service";
 import { AuditLog, AuditLogAction, AuthProviders, Prisma, User } from "@prisma/client";
 import { CacheService } from "@/cache/cache.service";
+import CacheKeys, { DEFAULT_CACHE_TTL } from "@/cache/cache-keys.constants";
+import ErrorCodes, { getErrorMessage } from "@/common/error-codes";
+import SENSITIVE_USER_INFORMATION from "@/common/sensitive-user-data";
 
 @Injectable()
 export class UserService {
@@ -14,8 +17,16 @@ export class UserService {
 
   async user(userWhereUniqueInput: Prisma.UserWhereUniqueInput): Promise<User | null> {
     return await this.prisma.user.findUnique({
-      where: userWhereUniqueInput,
+      where: { ...userWhereUniqueInput, deleted: false },
     });
+  }
+
+  async getUserProfile(userId: string): Promise<User | NotFoundException> {
+    const user = await this.findOne(userId);
+    if (user) {
+      return { ...user, ...SENSITIVE_USER_INFORMATION };
+    }
+    return new NotFoundException(getErrorMessage(ErrorCodes.NOT_FOUND));
   }
 
   async findByEmail(email: string): Promise<User | null> {
@@ -25,24 +36,24 @@ export class UserService {
       cacheKey,
       () =>
         this.prisma.user.findUnique({
-          where: { email },
+          where: { email, deleted: false },
           include: { accounts: true },
         }),
-      5 * 60 * 1000, //5mins
+      DEFAULT_CACHE_TTL,
     );
   }
 
   async findOne(id: string): Promise<User | null> {
-    const cacheKey = `user:${id}`;
+    const cacheKey = CacheKeys.user(id);
 
     return this.cacheService.wrap(
       cacheKey,
       () =>
         this.prisma.user.findUnique({
-          where: { id },
+          where: { id, deleted: false },
           include: { accounts: true },
         }),
-      5 * 60 * 1000, //5mins
+      DEFAULT_CACHE_TTL,
     );
   }
 
@@ -59,13 +70,13 @@ export class UserService {
     const { where, data } = params;
     return await this.prisma.user.update({
       data,
-      where,
+      where: { ...where, deleted: false },
     });
   }
 
   async updateHashedRefreshToken(userId: string, hashedRefreshToken: string | null): Promise<User> {
     return await this.prisma.user.update({
-      where: { id: userId },
+      where: { id: userId, deleted: false },
       data: { hashedRefreshToken },
     });
   }
@@ -79,7 +90,7 @@ export class UserService {
     imageUrl?: string,
   ): Promise<User> {
     // Try to find existing account
-    let cacheKey = `user:oauth:${provider}:${providerAccountId}`;
+    let cacheKey = CacheKeys.oAuth(provider, providerAccountId);
 
     const existingAccount = await this.cacheService.wrap(
       cacheKey,
@@ -93,7 +104,7 @@ export class UserService {
           },
           include: { user: true },
         }),
-      5 * 60 * 1000, //5mins
+      DEFAULT_CACHE_TTL,
     );
 
     if (existingAccount) {

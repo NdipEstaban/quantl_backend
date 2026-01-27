@@ -1,40 +1,9 @@
 // src/trade-account/dtos/update-account.dto.ts
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsOptional, IsString, IsNumber, Min } from "class-validator";
+import { TradingPlatform } from "@prisma/client";
+import { IsOptional, IsString, IsNumber, Min, IsNotEmpty } from "class-validator";
 
 export class UpdateAccountDto {
-  @ApiPropertyOptional({
-    description: "MT5 server address",
-    example: "155748778457",
-  })
-  @IsOptional()
-  @IsString()
-  accountNumber?: string;
-
-  @ApiPropertyOptional({
-    description: "MT5 server",
-    example: "MetaQuotes-Demo",
-  })
-  @IsOptional()
-  @IsString()
-  server?: string;
-
-  @ApiPropertyOptional({
-    description: "Investor password for the account",
-    example: "password123",
-  })
-  @IsOptional()
-  @IsString()
-  password?: string;
-
-  @ApiPropertyOptional({
-    description: "Custom account name",
-    example: "My Trading Account",
-  })
-  @IsOptional()
-  @IsString()
-  accountName?: string;
-
   @ApiPropertyOptional({
     description: "Sync frequency in seconds (minimum 30)",
     example: 60,
@@ -44,6 +13,16 @@ export class UpdateAccountDto {
   @IsNumber()
   @Min(30)
   syncFrequency?: number;
+
+  @ApiPropertyOptional({
+    description: "Sync frequency in seconds (minimum 30)",
+    example: 60,
+    minimum: 30,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(30)
+  autoSync?: boolean;
 
   @ApiPropertyOptional({
     description: "Whether the account is active for syncing",
@@ -117,4 +96,51 @@ export class SyncResponseDto {
     leverage: number;
     numberOfTrades: number;
   };
+}
+
+export class ConnectAccountDto {
+  @ApiProperty({ description: "User unique id" })
+  @IsString()
+  @IsNotEmpty()
+  userId: string;
+
+  @ApiProperty({ description: "Unique Id of the trading platform" })
+  @IsString()
+  @IsNotEmpty()
+  platformId: string;
+
+  @ApiProperty({ description: "Nickname of the account" })
+  @IsString()
+  @IsOptional()
+  nickname?: string;
+
+  @ApiProperty({ description: "Credentials for connection" })
+  @IsNotEmpty()
+  credentials: Record<string, any>;
+}
+
+// Helper type for specific platform credentials (for type safety in your backend)
+export interface MT5Credentials {
+  login: string;
+  password: string;
+  server: string;
+}
+
+export interface BinanceCredentials {
+  apiKey: string;
+  apiSecret: string;
+}
+
+export interface IBKRCredentials {
+  username: string;
+  accountType: "live" | "paper";
+}
+
+export interface CTraderCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+export interface TradingViewCredentials {
+  webhookUrl?: string; // Generated on backend
 }

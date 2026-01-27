@@ -14,6 +14,8 @@ import {
   HttpStatus,
   Query,
   Patch,
+  Ip,
+  Headers,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiBearerAuth } from "@nestjs/swagger";
 import { ConnectionConfigDto } from "@/metatrader/dto/metatrader.dto";
@@ -26,6 +28,8 @@ import { InvalidateCache } from "@/cache/cache.decorator";
 import { CacheKey } from "@nestjs/cache-manager";
 import CacheKeys from "@/cache/cache-keys.constants";
 import { CacheService } from "@/cache/cache.service";
+import { ConnectionConfig } from "@/metatrader/interfaces/account.interface";
+import { ConnectAccountDto } from "./dtos/trading-account.dto";
 
 @ApiTags("Trading Accounts")
 @Controller("trade-accounts")
@@ -50,11 +54,38 @@ export class TradeAccountController {
     status: 200,
     description: "List of connected trading accounts retrieved successfully",
   })
-  async getConnectedAccounts(@Query("userId") userId?: string) {
-    return this.tradeAccountService.getConnectedAccounts(userId);
+  async getConnectedAccounts(
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent: string,
+    @Query("userId") userId?: string,
+  ) {
+    return this.tradeAccountService.getConnectedAccounts(ipAddress, userAgent, userId);
   }
 
   // ============ Account Connection Management ============
+  @Post("connect")
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: "Connect a new trading account",
+    description: "Connects a new trading account depending on the platform",
+  })
+  @ApiBody({ type: ConnectAccountDto })
+  @ApiResponse({
+    status: 201,
+    description: "MT5 account connected successfully",
+  })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid connection parameters or investor password required",
+  })
+  async connectNewAccount(
+    @Body() connectionConfig: ConnectAccountDto,
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent: string,
+  ) {
+    return this.tradeAccountService.connectTradingAccount(ipAddress, userAgent, connectionConfig);
+  }
+
   @Post("connect/mt5")
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
@@ -70,13 +101,20 @@ export class TradeAccountController {
     status: 400,
     description: "Invalid connection parameters or investor password required",
   })
-  async connectMetatraderAccount(@Body() connectionConfig: ConnectionConfigDto) {
+  @InvalidateCache((connectionConfig: ConnectionConfig) => [
+    CacheKeys.allUserTradingAccounts(connectionConfig.userId),
+  ])
+  async connectMetatraderAccount(
+    @Body() connectionConfig: ConnectionConfigDto,
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent: string,
+  ) {
     // Add userId from authenticated user to the connection config
     const accountInfo = {
       ...connectionConfig,
     };
 
-    return this.tradeAccountService.connectMetatraderAccount(accountInfo);
+    return this.tradeAccountService.connectMetatraderAccount(ipAddress, userAgent, accountInfo);
   }
 
   @Delete(":accountId/disconnect")
@@ -97,8 +135,12 @@ export class TradeAccountController {
     status: 404,
     description: "Trading account not found",
   })
-  async disconnectAccount(@Param("accountId") tradingAccountId: string) {
-    return this.tradeAccountService.disconnectAccount(tradingAccountId);
+  async disconnectAccount(
+    @Param("accountId") tradingAccountId: string,
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent: string,
+  ) {
+    return this.tradeAccountService.disconnectAccount(ipAddress, userAgent, tradingAccountId);
   }
 
   // ============ Account Synchronization ============
@@ -112,9 +154,12 @@ export class TradeAccountController {
     status: 200,
     description: "All accounts synchronized successfully",
   })
-  @InvalidateCache((userId: string) => CacheKeys.allUserTradingAccounts(userId))
-  async syncAllAccounts(@Query("userId") userId: string) {
-    return this.tradeAccountService.syncAllAccounts(userId);
+  async syncAllAccounts(
+    @Query("userId") userId: string,
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent: string,
+  ) {
+    return this.tradeAccountService.syncAllAccounts(ipAddress, userAgent, userId);
   }
 
   @Post(":accountId/sync")
@@ -135,9 +180,13 @@ export class TradeAccountController {
     status: 404,
     description: "Trading account not found",
   })
-  @InvalidateCache((tradingAccountId: string) => CacheKeys.allTradingAccountData(tradingAccountId))
-  async synchronizeMetatraderAccount(@Param("accountId") tradingAccountId: string) {
-    return this.tradeAccountService.synchronizeMetatraderAccount(tradingAccountId);
+  @InvalidateCache((tradingAccountId: string) => [CacheKeys.allTradingAccountData(tradingAccountId)])
+  async synchronizeMetatraderAccount(
+    @Param("accountId") tradingAccountId: string,
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent: string,
+  ) {
+    return this.tradeAccountService.synchronizeMetatraderAccount(ipAddress, userAgent, tradingAccountId);
   }
 
   // ============ Account Update ============
@@ -175,7 +224,13 @@ export class TradeAccountController {
     status: 400,
     description: "Failed to update MT5 connection",
   })
-  async updateAccount(@Param("accountId") accountId: string, @Body() updates: any) {
-    return this.tradeAccountService.updateAccount(accountId, updates);
+  @InvalidateCache((accountId: string) => [CacheKeys.allTradingAccountData(accountId)])
+  async updateAccount(
+    @Param("accountId") accountId: string,
+    @Body() updates: any,
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent: string,
+  ) {
+    return this.tradeAccountService.updateAccount(ipAddress, userAgent, accountId, updates);
   }
 }

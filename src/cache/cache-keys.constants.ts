@@ -9,19 +9,21 @@ export const CacheKeys = {
 
   // Trading account specific
   tradingAccount: (accountId: string) => `trading_account:${accountId}`,
-
   numberOfTrades: (accountId: string) => `trading_account:${accountId}:number_of_trades`,
 
   // User specific
   user: (userId: string) => `user:${userId}`,
-
-  userTradingAccounts: (userId: string) => `user:trading_accounts:${userId}`,
+  userTradingAccounts: (userId: string) => `user:${userId}:trading_accounts`,
+  oAuth: (provider: string, providerAccountId: string) => `user:oauth:${provider}:${providerAccountId}`,
+  verificationAttempts: (userId: string) => `user:${userId}:verificationAttempts`,
+  verificationCode: (userId: string) => `user:${userId}:verificationCode`,
+  passwordResetCode: (userId: string) => `user:${userId}:passwordResetCode`,
+  passwordAttempts: (userId: string) => `user:${userId}:passwordAttempts`,
+  verifiedResetCode: (userId: string, code: string) => `user:${userId}:verifiedResetCode:${code}`,
 
   // Wildcard patterns for invalidation
-  allUserTradingAccounts: (userId: string) => `user:trading_accounts:${userId}*`,
-
+  allUserTradingAccounts: (userId: string) => `user:${userId}:trading_accounts*`,
   allUserData: (userId: string) => `user:${userId}*`,
-
   allTradingAccountData: (accountId: string) => `trading_account:${accountId}*`,
 };
 

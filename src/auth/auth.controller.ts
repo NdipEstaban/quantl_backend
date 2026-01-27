@@ -71,7 +71,7 @@ export class AuthController {
   async login(
     @Req() req: AuthenticatedRequest, // Use custom type
     @Ip() ipAddress: string,
-    @Headers("user-agent") userAgent: string,
+    @Headers("user-agent") userAgent?: string,
   ) {
     return this.authService.login(
       { email: req.user.email!, password: "" }, // Password validated by guard
@@ -92,7 +92,7 @@ export class AuthController {
   async signOut(
     @Req() req: AuthenticatedRequest,
     @Ip() ipAddress: string,
-    @Headers("user-agent") userAgent: string,
+    @Headers("user-agent") userAgent?: string,
   ) {
     await this.authService.logOut(req.user.id, ipAddress, userAgent);
     return { message: "Logged out successfully" };

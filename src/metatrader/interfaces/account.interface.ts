@@ -25,6 +25,8 @@ export interface AccountInfo {
     max_bars: number;
   };
   timestamp: string;
+  is_demo: boolean;
+  is_contest: boolean;
 }
 
 // Account summary with additional metrics

@@ -2,13 +2,20 @@ import CacheKeys, { DEFAULT_CACHE_TTL } from "@/cache/cache-keys.constants";
 import { CacheService } from "@/cache/cache.service";
 import { MetatraderService } from "@/metatrader/metatrader.service";
 import { PrismaService } from "@/prisma.service";
-import { Injectable } from "@nestjs/common";
-import { OrderSide, OrderStatus, OrderType, TradingAccount } from "@prisma/client";
+import { HttpException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  AuditLogAction,
+  OrderSide,
+  OrderStatus,
+  OrderType,
+  TradingAccount,
+  TradingPlatform,
+} from "@prisma/client";
 import { randomUUID } from "crypto";
 import * as crypto from "crypto";
 import { ConnectionConfigDto } from "@/metatrader/dto/metatrader.dto";
-import { UpdateAccountDto } from "./dtos/trading-account.dto";
-import cleanObject from "@/common/clean-objects";
+import { ConnectAccountDto, UpdateAccountDto } from "./dtos/trading-account.dto";
+import ErrorCodes, { getErrorMessage } from "@/common/error-codes";
 
 @Injectable()
 export class TradingAccountService {
@@ -27,10 +34,10 @@ export class TradingAccountService {
     private metatraderService: MetatraderService,
   ) {}
 
-  async getConnectedAccounts(userId?: string): Promise<any[]> {
+  async getConnectedAccounts(ipAddress: string, userAgent: string, userId?: string): Promise<any[]> {
     if (userId) {
       const cacheKey = CacheKeys.userTradingAccounts(userId);
-      const tradingAccounts = await this.cacheService.wrap(
+      const accounts = await this.cacheService.wrap(
         cacheKey,
         () =>
           this.prisma.tradingAccount.findMany({
@@ -42,18 +49,37 @@ export class TradingAccountService {
               connectionConfig: true,
             },
           }),
-        24 * 60 * 60 * 1000, //24hours
+        DEFAULT_CACHE_TTL,
       );
 
-      const result: any[] = [];
-      for (const account of tradingAccounts) {
-        const numberOfTrades = await this.cacheService.get<number>(CacheKeys.numberOfTrades(account.id));
+      const result = [];
+      for (const account of accounts) {
+        const logs = await this.prisma.auditLog.findMany({
+          where: {
+            action: {
+              in: [AuditLogAction.ACCOUNT_LINKED, AuditLogAction.TRADE_SYNC],
+            },
+            userId: account.userId,
+            metadata: {
+              path: ["tradingAccountId"],
+              equals: account.id,
+            },
+          },
+          omit: {
+            ipAddress: true,
+            userAgent: true,
+            deleted: true,
+          },
+          orderBy: {
+            createdAt: "desc",
+          },
+        });
+
         result.push({
           ...account,
-          numberOfTrades: numberOfTrades || 0,
+          logs,
         });
       }
-
       return result;
     } else {
       const cacheKey = CacheKeys.allTradingAccounts();
@@ -66,12 +92,19 @@ export class TradingAccountService {
               deleted: false,
             },
           }),
-        24 * 60 * 60 * 1000, //24hours
+        DEFAULT_CACHE_TTL,
       );
     }
   }
 
-  async connectMetatraderAccount(accountInfo: ConnectionConfigDto) {
+  async connectTradingAccount(ipAddress: string, userAgent: string, accountInfo: ConnectAccountDto) {
+    if (accountInfo.platformId === TradingPlatform.MT5) {
+      const credentials = accountInfo.credentials as ConnectionConfigDto;
+      return await this.connectMetatraderAccount(ipAddress, userAgent, credentials);
+    }
+  }
+
+  async connectMetatraderAccount(ipAddress: string, userAgent: string, accountInfo: ConnectionConfigDto) {
     const connectionName = randomUUID();
     accountInfo.name = connectionName;
 
@@ -80,17 +113,17 @@ export class TradingAccountService {
 
     // Check if the user entered an investor password
     if (!testConnection?.success) {
-      throw new Error("Failed to connect to MT5 account");
+      throw new HttpException(ErrorCodes.ACCOUNT_NOT_FOUND.toString(), HttpStatus.BAD_REQUEST);
     }
 
     if (testConnection.account_info?.is_investor_password == false) {
-      throw new Error("Please provide an investor password to connect the account");
+      throw new Error(ErrorCodes.PROVIDE_INVESTOR_PASSWORD.toString());
     }
 
     // Create connection
     const createConnection = await this.metatraderService.createConnection(accountInfo);
     if (!createConnection?.success) {
-      throw new Error("Failed to create MT5 connection");
+      throw new HttpException(ErrorCodes.INTERNAL_SERVER_ERROR.toString(), HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
     // Get account info and create trading account in db
@@ -98,10 +131,6 @@ export class TradingAccountService {
 
     // Encrypt the investor password
     const encryptedPassword = this.encryptPassword(accountInfo.password);
-
-    // Determine if this is a demo account
-    const isDemo =
-      accountData.server.toLowerCase().includes("demo") || accountData.name.toLowerCase().includes("demo");
 
     // Extract broker name
     const brokerName = accountData.company || accountData.server.split(".")[0] || "Unknown Broker";
@@ -114,7 +143,7 @@ export class TradingAccountService {
       encryptedPassword: encryptedPassword,
       passwordEncryptedAt: new Date().toISOString(),
       encryptionAlgorithm: this.ALGORITHM,
-      platform: "MT5",
+      platform: TradingPlatform.MT5.toString(),
       lastConnected: new Date().toISOString(),
     };
 
@@ -137,8 +166,8 @@ export class TradingAccountService {
         freeMargin: accountData.free_margin,
         currency: accountData.currency || "USD",
         leverage: accountData.leverage ? parseInt(accountData.leverage.toString()) : null,
-        isDemo: isDemo,
-        isPaperTrade: isDemo,
+        isDemo: accountData.is_demo,
+        isContest: accountData.is_contest,
         isActive: accountData.terminal_info?.connected || false,
         lastSyncAt: new Date(),
         syncError: null,
@@ -146,7 +175,7 @@ export class TradingAccountService {
         deleted: false,
       },
       create: {
-        platform: "MT5",
+        platform: TradingPlatform.MT5,
         accountIdentifier: accountData.login.toString(),
         brokerName: brokerName,
         accountName: accountData.name || `MT5 Account ${accountData.login}`,
@@ -157,8 +186,8 @@ export class TradingAccountService {
         freeMargin: accountData.free_margin,
         currency: accountData.currency || "USD",
         leverage: accountData.leverage ? parseInt(accountData.leverage.toString()) : null,
-        isDemo: isDemo,
-        isPaperTrade: isDemo,
+        isDemo: accountData.is_demo,
+        isContest: accountData.is_contest,
         isActive: accountData.terminal_info?.connected || false,
         lastSyncAt: new Date(),
         syncFrequency: 60,
@@ -169,9 +198,25 @@ export class TradingAccountService {
 
     // Cache the connection name
     await this.cacheService.set(CacheKeys.metatraderConnection(newTradingAccount.id), connectionName);
+
+    //create logs
+    await this.prisma.auditLog.create({
+      data: {
+        userId: newTradingAccount.userId,
+        action: AuditLogAction.ACCOUNT_LINKED,
+        ipAddress,
+        userAgent,
+        metadata: {
+          platform: newTradingAccount.platform,
+          isDemo: newTradingAccount.isDemo,
+          isContext: newTradingAccount.isContest,
+          brokerName: newTradingAccount.brokerName,
+        },
+      },
+    });
   }
 
-  async disconnectAccount(tradingAccountId: string): Promise<void> {
+  async disconnectAccount(ipAddress: string, userAgent: string, tradingAccountId: string): Promise<void> {
     const tradingAccount = await this.cacheService.wrap<TradingAccount | null>(
       CacheKeys.tradingAccount(tradingAccountId),
       () => this.prisma.tradingAccount.findUnique({ where: { id: tradingAccountId } }),
@@ -186,17 +231,26 @@ export class TradingAccountService {
     }
   }
 
-  async syncAllAccounts(userId: string): Promise<any> {
-    const tradingAccounts = await this.prisma.tradingAccount.findMany({
-      where: {
-        userId,
-      },
-    });
+  async syncAllAccounts(ipAddress: string, userAgent: string, userId: string): Promise<any> {
+    const cacheKey = CacheKeys.userTradingAccounts(userId);
+    const tradingAccounts = await this.cacheService.wrap(
+      cacheKey,
+      () =>
+        this.prisma.tradingAccount.findMany({
+          where: {
+            userId,
+          },
+          select: {
+            id: true,
+          },
+        }),
+      DEFAULT_CACHE_TTL,
+    );
 
     const syncAccounts = [];
 
     for (const account of tradingAccounts) {
-      syncAccounts.push(this.synchronizeMetatraderAccount(account.id));
+      syncAccounts.push(this.synchronizeMetatraderAccount(ipAddress, userAgent, account.id));
     }
 
     const synchedAccounts = await Promise.all(syncAccounts);
@@ -208,57 +262,33 @@ export class TradingAccountService {
     };
   }
 
-  async updateAccount(accountId: string, data: UpdateAccountDto): Promise<TradingAccount | void> {
-    const tradingAccount = await this.cacheService.wrap<TradingAccount | null>(
-      CacheKeys.tradingAccount(accountId),
-      () => this.prisma.tradingAccount.findUnique({ where: { id: accountId } }),
-      DEFAULT_CACHE_TTL,
-    );
+  async updateAccount(
+    ipAddress: string,
+    userAgent: string,
+    accountId: string,
+    data: UpdateAccountDto,
+  ): Promise<TradingAccount | void> {
+    const tradingAccount = await this.prisma.tradingAccount.findUnique({ where: { id: accountId } });
+
     if (!tradingAccount) {
-      throw new Error("Trading account not found");
+      throw new NotFoundException(ErrorCodes.ACCOUNT_NOT_FOUND);
     }
 
-    const connectionName = (await this.cacheService.get(CacheKeys.metatraderConnection(accountId))) as string;
-    const existingConnection = await this.metatraderService.getConnection(connectionName);
+    await this.prisma.tradingAccount.update({
+      where: {
+        id: accountId,
+      },
+      data,
+    });
 
-    if (existingConnection) {
-      const updateConnection = await this.metatraderService.updateConnection(connectionName, {
-        name: connectionName,
-        ...cleanObject({
-          server: data.server,
-          login: data.accountNumber,
-          password: data.password,
-        }),
-      });
-
-      if (!updateConnection?.success) {
-        throw new Error("Failed to update MT5 connection");
-      }
-
-      const connectionConfig = cleanObject({
-        server: data.server,
-        serverAddress: data.server,
-        login: data.accountNumber,
-        encryptedPassword: data.password ? this.encryptPassword(data.password) : undefined,
-        passwordEncryptedAt: data.password ? new Date().toISOString() : undefined,
-        encryptionAlgorithm: data.password ? this.ALGORITHM : undefined,
-        platform: "MT5",
-        lastConnected: new Date().toISOString(),
-      });
-
-      return await this.prisma.tradingAccount.update({
-        where: { id: accountId },
-        data: cleanObject({
-          accountName: data.accountName,
-          syncFrequency: data.syncFrequency,
-          isActive: data.isActive,
-          connectionConfig,
-        }),
-      });
-    }
+    await this.cacheService.del(CacheKeys.userTradingAccounts(tradingAccount.userId));
   }
 
-  async synchronizeMetatraderAccount(tradingAccountId: string): Promise<any> {
+  async synchronizeMetatraderAccount(
+    ipAddress: string,
+    userAgent: string,
+    tradingAccountId: string,
+  ): Promise<any> {
     const connectionName = (await this.cacheService.get(
       CacheKeys.metatraderConnection(tradingAccountId),
     )) as string;
@@ -447,8 +477,39 @@ export class TradingAccountService {
           console.log(`Successfully upserted ${upsertPromises.length} orders`);
         }
 
+        //add logs for number of trades synchronized
+        const oldAccountData = await this.prisma.tradingAccount.findUnique({
+          where: {
+            id: tradingAccountId,
+          },
+          select: {
+            numberOfTrades: true,
+            userId: true,
+          },
+        });
+        if (oldAccountData != null && oldAccountData.numberOfTrades) {
+          const logsMetaData = {
+            success: true,
+            tradingAccountId,
+            newTrades:
+              numberOfTrades > oldAccountData.numberOfTrades
+                ? numberOfTrades - oldAccountData.numberOfTrades
+                : 0,
+          };
+
+          await this.prisma.auditLog.create({
+            data: {
+              userId: oldAccountData.userId,
+              action: AuditLogAction.TRADE_SYNC,
+              ipAddress: ipAddress,
+              userAgent: userAgent,
+              metadata: logsMetaData,
+            },
+          });
+        }
+
         //update trading account info
-        await this.prisma.tradingAccount.update({
+        const tradingAccount = await this.prisma.tradingAccount.update({
           where: { id: tradingAccountId },
           data: {
             balance: accountData.balance,
@@ -464,6 +525,8 @@ export class TradingAccountService {
           },
         });
 
+        await this.cacheService.del(CacheKeys.userTradingAccounts(tradingAccount.userId));
+
         return {
           id: tradingAccountId,
           login: accountData.login,
@@ -477,14 +540,50 @@ export class TradingAccountService {
           numberOfTrades,
         };
       } catch (error) {
-        await this.prisma.tradingAccount.update({
+        const errorMessage = getErrorMessage(error.response.status);
+        const account = await this.prisma.tradingAccount.update({
           where: {
             id: tradingAccountId,
           },
           data: {
-            syncError: error,
+            syncError: errorMessage,
           },
+
+          /*
+ syncError: {
+              response: {
+              ~~~~~~~~
+                statusCode: 500,
+                message: "Error",
+                details: undefined
+              },
+              status: 500,
+              options: undefined,
+              message: "Error",
+              name: "HttpException",
+        ?     set?: String | Null
+            }
+          }
+          */
         });
+
+        //create logs
+        if (account != null) {
+          const logsMetaData = {
+            success: false,
+            error: errorMessage,
+          };
+
+          await this.prisma.auditLog.create({
+            data: {
+              userId: account.userId,
+              action: AuditLogAction.TRADE_SYNC,
+              ipAddress: ipAddress,
+              userAgent: userAgent,
+              metadata: logsMetaData,
+            },
+          });
+        }
 
         return {
           id: tradingAccountId,

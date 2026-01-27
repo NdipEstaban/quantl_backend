@@ -13,6 +13,10 @@ async function bootstrap() {
     logger: ["error", "warn", "log", "debug", "verbose"],
   });
 
+  // Enable Express to trust reverse proxy headers (X-Forwarded-For, etc.)
+  // so @Ip() returns the real client IP instead of the proxy's IP.
+  app.getHttpAdapter().getInstance().set("trust proxy", 1);
+
   // Enable CORS
   app.enableCors({
     origin: process.env.CORS_ORIGIN || true,
