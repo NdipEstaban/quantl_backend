@@ -103,6 +103,7 @@ export class TradeAccountController {
   })
   @InvalidateCache((connectionConfig: ConnectionConfig) => [
     CacheKeys.allUserTradingAccounts(connectionConfig.userId),
+    CacheKeys.allTradingAccountBySyncFrequency(),
   ])
   async connectMetatraderAccount(
     @Body() connectionConfig: ConnectionConfigDto,

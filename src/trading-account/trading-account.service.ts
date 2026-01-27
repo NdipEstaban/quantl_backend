@@ -253,7 +253,7 @@ export class TradingAccountService {
       syncAccounts.push(this.synchronizeMetatraderAccount(ipAddress, userAgent, account.id));
     }
 
-    const synchedAccounts = await Promise.all(syncAccounts);
+    const synchedAccounts = await Promise.allSettled(syncAccounts);
 
     return {
       success: true,
@@ -282,6 +282,9 @@ export class TradingAccountService {
     });
 
     await this.cacheService.del(CacheKeys.userTradingAccounts(tradingAccount.userId));
+    if (data.syncFrequency) {
+      await this.cacheService.del(CacheKeys.tradingAccountBySyncFrequency(data.syncFrequency));
+    }
   }
 
   async synchronizeMetatraderAccount(

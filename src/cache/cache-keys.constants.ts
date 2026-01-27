@@ -10,6 +10,7 @@ export const CacheKeys = {
   // Trading account specific
   tradingAccount: (accountId: string) => `trading_account:${accountId}`,
   numberOfTrades: (accountId: string) => `trading_account:${accountId}:number_of_trades`,
+  tradingAccountBySyncFrequency: (syncInterval: number) => `trading_account:sync_interval:${syncInterval}`,
 
   // User specific
   user: (userId: string) => `user:${userId}`,
@@ -25,6 +26,7 @@ export const CacheKeys = {
   allUserTradingAccounts: (userId: string) => `user:${userId}:trading_accounts*`,
   allUserData: (userId: string) => `user:${userId}*`,
   allTradingAccountData: (accountId: string) => `trading_account:${accountId}*`,
+  allTradingAccountBySyncFrequency: () => `trading_account:sync_interval:*`,
 };
 
 export default CacheKeys;

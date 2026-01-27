@@ -10,6 +10,8 @@ import { AppController } from "./app.controller";
 import { AppService } from "./app.service";
 import { CustomCacheModule } from "./cache/cache.module";
 import { TradingAccountModule } from "./trading-account/trading-account.module";
+import { ScheduleModule } from "@nestjs/schedule";
+import { SyncTradingAccounts } from "./common/cron/syncTradingAccounts.cron";
 
 @Module({
   imports: [
@@ -22,8 +24,9 @@ import { TradingAccountModule } from "./trading-account/trading-account.module";
     AuthModule,
     UserModule,
     TradingAccountModule,
+    ScheduleModule.forRoot(),
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, SyncTradingAccounts],
 })
 export class AppModule {}
