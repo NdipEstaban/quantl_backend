@@ -13,6 +13,7 @@ import { TradingAccountModule } from "./trading-account/trading-account.module";
 import { ScheduleModule } from "@nestjs/schedule";
 import { SyncTradingAccounts } from "./common/cron/syncTradingAccounts.cron";
 import { PrismaService } from "./prisma.service";
+import { MetricsModule } from "./metrics/metrics.module";
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { PrismaService } from "./prisma.service";
     AuthModule,
     UserModule,
     TradingAccountModule,
+    MetricsModule,
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController],

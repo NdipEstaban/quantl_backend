@@ -528,6 +528,7 @@ export class TradingAccountService {
           },
         });
 
+        //because is a list of objects containing account data not just ids
         await this.cacheService.del(CacheKeys.userTradingAccounts(tradingAccount.userId));
 
         return {

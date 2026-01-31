@@ -4,6 +4,7 @@ import { Observable, of } from "rxjs";
 import { tap } from "rxjs/operators";
 import { Reflector } from "@nestjs/core";
 import { CacheService } from "./cache.service";
+import { DEFAULT_CACHE_TTL } from "./cache-keys.constants";
 
 export const CACHE_TTL_KEY = "cache-ttl";
 export const CACHE_KEY_PREFIX = "cache-key-prefix";
@@ -17,7 +18,7 @@ export class CacheInterceptor implements NestInterceptor {
 
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<any>> {
     const request = context.switchToHttp().getRequest();
-    const customTtl = this.reflector.get<number>(CACHE_TTL_KEY, context.getHandler());
+    const customTtl = this.reflector.get<number>(CACHE_TTL_KEY, context.getHandler()) ?? DEFAULT_CACHE_TTL;
     const keyPrefix = this.reflector.get<string>(CACHE_KEY_PREFIX, context.getHandler()) || "";
 
     // Generate cache key from request
