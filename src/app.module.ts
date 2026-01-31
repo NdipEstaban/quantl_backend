@@ -12,6 +12,7 @@ import { CustomCacheModule } from "./cache/cache.module";
 import { TradingAccountModule } from "./trading-account/trading-account.module";
 import { ScheduleModule } from "@nestjs/schedule";
 import { SyncTradingAccounts } from "./common/cron/syncTradingAccounts.cron";
+import { PrismaService } from "./prisma.service";
 
 @Module({
   imports: [
@@ -27,6 +28,6 @@ import { SyncTradingAccounts } from "./common/cron/syncTradingAccounts.cron";
     ScheduleModule.forRoot(),
   ],
   controllers: [AppController],
-  providers: [AppService, SyncTradingAccounts],
+  providers: [PrismaService, AppService, SyncTradingAccounts],
 })
 export class AppModule {}

@@ -96,7 +96,6 @@ export class SyncTradingAccounts {
             },
             select: {
               id: true,
-              accountNumber: true, // Added for better logging
             },
           }),
         DEFAULT_CACHE_TTL,
