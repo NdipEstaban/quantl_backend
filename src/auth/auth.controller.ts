@@ -142,11 +142,27 @@ export class AuthController {
       userAgent,
     );
 
+    // 1. Set the Access Token as an HttpOnly Cookie
+    res.cookie("access_token", result.accessToken, {
+      httpOnly: true, // Prevents JS from reading the cookie
+      secure: process.env.NODE_ENV === "production", // Only over HTTPS
+      sameSite: "lax", // CSRF protection
+      path: "/",
+      maxAge: 3600000, // 1 hour
+    });
+
+    // 2. Set the Refresh Token (longer expiry)
+    res.cookie("refresh_token", result.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 604800000, // 7 days
+    });
+
+    // Redirect to a clean URL without sensitive tokens in the query
     res.redirect(
-      `http://localhost:3000/auth/callback?` +
-        `access_token=${result.accessToken}` +
-        `&refresh_token=${result.refreshToken}` +
-        `&user=${encodeURIComponent(JSON.stringify(result.user))}`,
+      `http://localhost:3000/auth/callback?user=${encodeURIComponent(JSON.stringify(result.user))}`,
     );
   }
 
