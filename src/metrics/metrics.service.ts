@@ -14,10 +14,41 @@ import {
   TradeFrequency,
   Vitals,
 } from "./interface";
+import { DealType } from "@prisma/client";
 
 @Injectable()
 export class MetricsService {
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * Helper function to round numbers to 2 decimal places
+   */
+  private round(value: number): number {
+    return Math.round(value * 100) / 100;
+  }
+
+  private isBalanceAffectingDeal(type: DealType): boolean {
+    return (
+      type === DealType.BALANCE ||
+      type === DealType.CREDIT ||
+      type === DealType.CHARGE ||
+      type === DealType.CORRECTION ||
+      type === DealType.BONUS ||
+      type === DealType.DIVIDEND ||
+      type === DealType.DIVIDEND_FRANKED ||
+      type === DealType.TAX ||
+      type === DealType.INTEREST ||
+      type === DealType.COMMISSION ||
+      type === DealType.COMMISSION_DAILY ||
+      type === DealType.COMMISSION_MONTHLY ||
+      type === DealType.COMMISSION_AGENT_DAILY ||
+      type === DealType.COMMISSION_AGENT_MONTHLY
+    );
+  }
+
+  private isCanceledTrade(type: DealType): boolean {
+    return type === DealType.BUY_CANCELED || type === DealType.SELL_CANCELED;
+  }
 
   /**
    * Get vital trading metrics for an account
@@ -32,8 +63,60 @@ export class MetricsService {
       throw new NotFoundException("Trading account not found");
     }
 
-    // Get all deals (only OUT deals represent closed trades with P&L)
+    // ============================
+    // TRADE METRICS (UNCHANGED)
+    // ============================
+
     const deals = await this.prisma.deal.findMany({
+      where: {
+        tradingAccountId: accountId,
+        deleted: false,
+        entryType: "OUT",
+        ...(startDate && endDate
+          ? {
+              time: {
+                gte: startDate.toJSDate(),
+                lte: endDate.toJSDate(),
+              },
+            }
+          : {}),
+      },
+      orderBy: { time: "asc" },
+    });
+
+    // Handle empty deals case
+    if (deals.length === 0) {
+      return {
+        winRate: 0,
+        profitFactor: 0,
+        averageRiskToReward: 0,
+        netProfit: 0,
+        percentageDrawdown: 0,
+        maxDrawdownDurationInDays: 0, // Default return
+        averageWin: 0,
+        averageLoss: 0,
+      };
+    }
+
+    const wins = deals.filter((d) => d.profit > 0);
+    const losses = deals.filter((d) => d.profit < 0);
+
+    const winRate = this.round((wins.length / deals.length) * 100);
+
+    const totalWins = wins.reduce((sum, d) => sum + d.profit, 0);
+    const totalLosses = Math.abs(losses.reduce((sum, d) => sum + d.profit, 0));
+
+    const profitFactor = totalLosses > 0 ? this.round(totalWins / totalLosses) : totalWins > 0 ? Infinity : 0;
+    const averageWin = wins.length > 0 ? this.round(totalWins / wins.length) : 0;
+    const averageLoss = losses.length > 0 ? this.round(totalLosses / losses.length) : 0;
+    const averageRiskToReward = averageLoss > 0 ? this.round(averageWin / averageLoss) : 0;
+    const netProfit = this.round(deals.reduce((sum, d) => sum + d.profit + d.swap + d.commission + d.fee, 0));
+
+    // ============================================
+    // MT5-CORRECT DRAWDOWN & DURATION CALCULATION
+    // ============================================
+
+    const equityDeals = await this.prisma.deal.findMany({
       where: {
         tradingAccountId: accountId,
         deleted: false,
@@ -45,65 +128,87 @@ export class MetricsService {
               },
             }
           : {}),
-        // Filter for OUT deals which represent closed positions
-        entryType: "OUT",
       },
       orderBy: { time: "asc" },
     });
 
-    if (deals.length === 0) {
-      return {
-        winRate: 0,
-        profitFactor: 0,
-        averageRiskToReward: 0,
-        netProfit: 0,
-        percentageDrawdown: 0,
-        averageWin: 0,
-        averageLoss: 0,
-      };
-    }
-
-    // Separate winning and losing trades
-    const wins = deals.filter((d) => d.profit > 0);
-    const losses = deals.filter((d) => d.profit < 0);
-
-    // Calculate win rate
-    const winRate = (wins.length / deals.length) * 100;
-
-    // Calculate total wins and losses
-    const totalWins = wins.reduce((sum, d) => sum + d.profit, 0);
-    const totalLosses = Math.abs(losses.reduce((sum, d) => sum + d.profit, 0));
-
-    // Calculate profit factor
-    const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0;
-
-    // Calculate average win and loss
-    const averageWin = wins.length > 0 ? totalWins / wins.length : 0;
-    const averageLoss = losses.length > 0 ? totalLosses / losses.length : 0;
-
-    // Calculate average risk to reward
-    const averageRiskToReward = averageLoss > 0 ? averageWin / averageLoss : 0;
-
-    // Calculate net profit (including fees and commissions)
-    const netProfit = deals.reduce((sum, d) => sum + d.profit + d.swap + d.commission + d.fee, 0);
-
-    // Calculate drawdown
-    let peak = 0;
-    let maxDrawdown = 0;
     let runningEquity = 0;
+    let peakEquity = 0;
+    let maxDrawdown = 0;
+    let maxDrawdownDurationInDays = 0;
 
-    for (const deal of deals) {
-      runningEquity += deal.profit + deal.swap + deal.commission + deal.fee;
-      if (runningEquity > peak) {
-        peak = runningEquity;
+    // Variables to track current drawdown period
+    let currentDrawdownStart: Date | null = null;
+    let currentPeakAtDrawdownStart = 0;
+
+    for (const deal of equityDeals) {
+      const dealType = deal.type as DealType;
+
+      // Ignore canceled trades completely
+      if (this.isCanceledTrade(dealType)) {
+        continue;
       }
-      const drawdown = peak - runningEquity;
+
+      // Balance / credit / adjustments
+      if (this.isBalanceAffectingDeal(dealType)) {
+        runningEquity += deal.profit;
+      }
+
+      // Trade P&L only on closed trades
+      if (deal.entryType === "OUT") {
+        runningEquity += deal.profit + deal.swap + deal.commission + deal.fee;
+      }
+
+      // Check if we're at a new peak
+      if (runningEquity > peakEquity) {
+        peakEquity = runningEquity;
+
+        // If we were in a drawdown and have recovered, end the drawdown period
+        if (currentDrawdownStart !== null) {
+          const drawdownDurationInMs = deal.time.getTime() - currentDrawdownStart.getTime();
+          const drawdownDurationInDays = drawdownDurationInMs / (1000 * 60 * 60 * 24);
+
+          // Update max drawdown duration if this one is longer
+          if (drawdownDurationInDays > maxDrawdownDurationInDays) {
+            maxDrawdownDurationInDays = drawdownDurationInDays;
+          }
+
+          currentDrawdownStart = null;
+        }
+      }
+
+      // Check if we're in drawdown
+      if (runningEquity < peakEquity) {
+        // If just entered drawdown, record the start time
+        if (currentDrawdownStart === null) {
+          currentDrawdownStart = deal.time;
+          currentPeakAtDrawdownStart = peakEquity;
+        }
+      }
+
+      // Calculate current drawdown for max drawdown value
+      const drawdown = peakEquity - runningEquity;
       if (drawdown > maxDrawdown) {
         maxDrawdown = drawdown;
       }
     }
 
-    const percentageDrawdown = peak > 0 ? (maxDrawdown / peak) * 100 : 0;
+    // If we're still in a drawdown at the end of the period,
+    // calculate duration from start until last deal time
+    if (currentDrawdownStart !== null && equityDeals.length > 0) {
+      const lastDealTime = equityDeals[equityDeals.length - 1].time;
+      const drawdownDurationInMs = lastDealTime.getTime() - currentDrawdownStart.getTime();
+      const drawdownDurationInDays = drawdownDurationInMs / (1000 * 60 * 60 * 24);
+
+      if (drawdownDurationInDays > maxDrawdownDurationInDays) {
+        maxDrawdownDurationInDays = drawdownDurationInDays;
+      }
+    }
+
+    const percentageDrawdown = peakEquity > 0 ? this.round((maxDrawdown / peakEquity) * 100) : 0;
+
+    // Round the duration to 2 decimal places for consistency
+    maxDrawdownDurationInDays = Math.ceil(percentageDrawdown > 0 ? maxDrawdownDurationInDays : 0);
 
     return {
       winRate,
@@ -113,6 +218,7 @@ export class MetricsService {
       percentageDrawdown,
       averageWin,
       averageLoss,
+      maxDrawdownDurationInDays, // Add this to return object
     };
   }
 
@@ -187,7 +293,7 @@ export class MetricsService {
       const periodKey = dealTime.toFormat(groupFormat);
       cumulativeEquity += deal.profit + deal.swap + deal.commission + deal.fee;
 
-      periodData.set(periodKey, cumulativeEquity);
+      periodData.set(periodKey, this.round(cumulativeEquity));
     }
 
     // Convert to array and sort
@@ -247,7 +353,7 @@ export class MetricsService {
       .map(([date, stats]) => ({
         date,
         tradeCount: stats.count,
-        profitLoss: stats.profitLoss,
+        profitLoss: this.round(stats.profitLoss),
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
@@ -301,7 +407,7 @@ export class MetricsService {
     const totalReturn = returns.reduce((sum, r) => sum + r, 0);
 
     // Expectancy (average profit per trade)
-    const expectancy = totalReturn / returns.length;
+    const expectancy = this.round(totalReturn / returns.length);
 
     // Calculate average return
     const avgReturn = expectancy;
@@ -309,7 +415,7 @@ export class MetricsService {
     // Sharpe Ratio (risk-adjusted return, assuming risk-free rate = 0)
     const variance = returns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / returns.length;
     const stdDev = Math.sqrt(variance);
-    const sharpeRatio = stdDev > 0 ? avgReturn / stdDev : 0;
+    const sharpeRatio = stdDev > 0 ? this.round(avgReturn / stdDev) : 0;
 
     // Sortino Ratio (downside deviation only)
     const negativeReturns = returns.filter((r) => r < avgReturn);
@@ -318,7 +424,7 @@ export class MetricsService {
         ? negativeReturns.reduce((sum, r) => sum + Math.pow(r - avgReturn, 2), 0) / negativeReturns.length
         : 0;
     const downsideDeviation = Math.sqrt(downsideVariance);
-    const sortinoRatio = downsideDeviation > 0 ? avgReturn / downsideDeviation : 0;
+    const sortinoRatio = downsideDeviation > 0 ? this.round(avgReturn / downsideDeviation) : 0;
 
     // Calmar Ratio (return / max drawdown)
     let peak = 0;
@@ -336,7 +442,7 @@ export class MetricsService {
       }
     }
 
-    const calmarRatio = maxDrawdown > 0 ? totalReturn / maxDrawdown : 0;
+    const calmarRatio = maxDrawdown > 0 ? this.round(totalReturn / maxDrawdown) : 0;
 
     return {
       expectancy,
@@ -399,7 +505,7 @@ export class MetricsService {
 
     return Array.from(weekdayTotals.entries()).map(([day, profit]) => ({
       day,
-      profit,
+      profit: this.round(profit),
     }));
   }
 
@@ -487,27 +593,27 @@ export class MetricsService {
         trades: sessionData.Asian.deals.length,
         winRate:
           sessionData.Asian.deals.length > 0
-            ? (sessionData.Asian.wins / sessionData.Asian.deals.length) * 100
+            ? this.round((sessionData.Asian.wins / sessionData.Asian.deals.length) * 100)
             : 0,
-        percentageOfTotal: (sessionData.Asian.deals.length / totalTrades) * 100,
+        percentageOfTotal: this.round((sessionData.Asian.deals.length / totalTrades) * 100),
       },
       {
         session: "London",
         trades: sessionData.London.deals.length,
         winRate:
           sessionData.London.deals.length > 0
-            ? (sessionData.London.wins / sessionData.London.deals.length) * 100
+            ? this.round((sessionData.London.wins / sessionData.London.deals.length) * 100)
             : 0,
-        percentageOfTotal: (sessionData.London.deals.length / totalTrades) * 100,
+        percentageOfTotal: this.round((sessionData.London.deals.length / totalTrades) * 100),
       },
       {
         session: "New York",
         trades: sessionData["New York"].deals.length,
         winRate:
           sessionData["New York"].deals.length > 0
-            ? (sessionData["New York"].wins / sessionData["New York"].deals.length) * 100
+            ? this.round((sessionData["New York"].wins / sessionData["New York"].deals.length) * 100)
             : 0,
-        percentageOfTotal: (sessionData["New York"].deals.length / totalTrades) * 100,
+        percentageOfTotal: this.round((sessionData["New York"].deals.length / totalTrades) * 100),
       },
     ];
   }
@@ -599,10 +705,14 @@ export class MetricsService {
     }
 
     const averageWinningStreak =
-      winningStreaks.length > 0 ? winningStreaks.reduce((a, b) => a + b, 0) / winningStreaks.length : 0;
+      winningStreaks.length > 0
+        ? this.round(winningStreaks.reduce((a, b) => a + b, 0) / winningStreaks.length)
+        : 0;
 
     const averageLosingStreak =
-      losingStreaks.length > 0 ? losingStreaks.reduce((a, b) => a + b, 0) / losingStreaks.length : 0;
+      losingStreaks.length > 0
+        ? this.round(losingStreaks.reduce((a, b) => a + b, 0) / losingStreaks.length)
+        : 0;
 
     return {
       maxWinningStreak,
@@ -667,7 +777,7 @@ export class MetricsService {
 
     const totalTradingDays = dailyTrades.size;
     const totalTrades = deals.length;
-    const averageTradesPerDay = totalTrades / totalTradingDays;
+    const averageTradesPerDay = this.round(totalTrades / totalTradingDays);
 
     // Find busiest and slowest days
     let busiestDay = "";
@@ -803,15 +913,19 @@ export class MetricsService {
       };
     }
 
-    const averageHoldingTimeMinutes = holdingTimes.reduce((a, b) => a + b, 0) / holdingTimes.length;
-    const shortestTradeMinutes = Math.min(...holdingTimes);
-    const longestTradeMinutes = Math.max(...holdingTimes);
+    const averageHoldingTimeMinutes = this.round(
+      holdingTimes.reduce((a, b) => a + b, 0) / holdingTimes.length,
+    );
+    const shortestTradeMinutes = this.round(Math.min(...holdingTimes));
+    const longestTradeMinutes = this.round(Math.max(...holdingTimes));
     const averageWinningTradeMinutes =
       winningTradeTimes.length > 0
-        ? winningTradeTimes.reduce((a, b) => a + b, 0) / winningTradeTimes.length
+        ? this.round(winningTradeTimes.reduce((a, b) => a + b, 0) / winningTradeTimes.length)
         : 0;
     const averageLosingTradeMinutes =
-      losingTradeTimes.length > 0 ? losingTradeTimes.reduce((a, b) => a + b, 0) / losingTradeTimes.length : 0;
+      losingTradeTimes.length > 0
+        ? this.round(losingTradeTimes.reduce((a, b) => a + b, 0) / losingTradeTimes.length)
+        : 0;
 
     return {
       averageHoldingTimeMinutes,
@@ -881,8 +995,8 @@ export class MetricsService {
       }
     }
 
-    const largestWin = wins.length > 0 ? Math.max(...wins) : 0;
-    const largestLoss = losses.length > 0 ? Math.max(...losses) : 0;
+    const largestWin = wins.length > 0 ? this.round(Math.max(...wins)) : 0;
+    const largestLoss = losses.length > 0 ? this.round(Math.max(...losses)) : 0;
 
     // Calculate median
     const getMedian = (arr: number[]): number => {
@@ -892,8 +1006,8 @@ export class MetricsService {
       return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
     };
 
-    const medianWin = getMedian(wins);
-    const medianLoss = getMedian(losses);
+    const medianWin = this.round(getMedian(wins));
+    const medianLoss = this.round(getMedian(losses));
 
     return {
       largestWin,
@@ -966,7 +1080,7 @@ export class MetricsService {
     const totalMonths = monthlyProfits.size;
 
     const profitableDays = Array.from(dailyProfits.values()).filter((p) => p > 0).length;
-    const consistencyScore = (profitableDays / dailyProfits.size) * 100;
+    const consistencyScore = this.round((profitableDays / dailyProfits.size) * 100);
 
     // Find best and worst months
     let bestMonth = { month: "", profit: -Infinity };
@@ -985,8 +1099,14 @@ export class MetricsService {
       profitableMonths,
       totalMonths,
       consistencyScore,
-      bestMonth: bestMonth.profit === -Infinity ? { month: "", profit: 0 } : bestMonth,
-      worstMonth: worstMonth.profit === Infinity ? { month: "", profit: 0 } : worstMonth,
+      bestMonth:
+        bestMonth.profit === -Infinity
+          ? { month: "", profit: 0 }
+          : { month: bestMonth.month, profit: this.round(bestMonth.profit) },
+      worstMonth:
+        worstMonth.profit === Infinity
+          ? { month: "", profit: 0 }
+          : { month: worstMonth.month, profit: this.round(worstMonth.profit) },
     };
   }
 }

@@ -81,10 +81,26 @@ export class AuthController {
   }
 
   @Public()
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(LocalAuthGuard)
+  @Post("login")
+  async getUserProfile(
+    @Req() req: AuthenticatedRequest, // Use custom type
+    @Ip() ipAddress: string,
+    @Headers("user-agent") userAgent?: string,
+  ) {
+    return this.authService.login(
+      { email: req.user.email!, password: "" }, // Password validated by guard
+      ipAddress,
+      userAgent,
+    );
+  }
+
+  @Public()
   @UseGuards(RefreshAuthGuard)
   @Post("refresh")
   async refreshToken(@Body() refreshTokenDto: RefreshTokenDto, @Req() req: AuthenticatedRequest) {
-    return this.authService.refreshToken(req.user.id, refreshTokenDto.refreshToken);
+    return this.authService.refreshToken(refreshTokenDto.refreshToken);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -196,5 +212,11 @@ export class AuthController {
       resetPasswordDto.code,
       resetPasswordDto.newPassword,
     );
+  }
+
+  @Public()
+  @Post("refresh-token")
+  async resetToken(@Body() refreshTokenDto: RefreshTokenDto) {
+    return this.authService.refreshToken(refreshTokenDto.refreshToken);
   }
 }

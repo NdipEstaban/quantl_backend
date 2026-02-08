@@ -5,6 +5,7 @@ import { PrismaService } from "@/prisma.service";
 import { HttpException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
 import {
   AuditLogAction,
+  DealType,
   OrderSide,
   OrderStatus,
   OrderType,
@@ -315,6 +316,48 @@ export class TradingAccountService {
             else if (deal.entry === 1) entryType = "OUT";
             else if (deal.entry === 2) entryType = "IN_OUT";
 
+            let dealType = null;
+
+            if (deal.type === 0) {
+              dealType = DealType.BUY;
+            } else if (deal.type === 1) {
+              dealType = DealType.SELL;
+            } else if (deal.type === 2) {
+              dealType = DealType.BALANCE;
+            } else if (deal.type === 3) {
+              dealType = DealType.CREDIT;
+            } else if (deal.type === 4) {
+              dealType = DealType.CHARGE;
+            } else if (deal.type === 5) {
+              dealType = DealType.CORRECTION;
+            } else if (deal.type === 6) {
+              dealType = DealType.BONUS;
+            } else if (deal.type === 7) {
+              dealType = DealType.COMMISSION;
+            } else if (deal.type === 8) {
+              dealType = DealType.COMMISSION_DAILY;
+            } else if (deal.type === 9) {
+              dealType = DealType.COMMISSION_MONTHLY;
+            } else if (deal.type === 10) {
+              dealType = DealType.COMMISSION_AGENT_DAILY;
+            } else if (deal.type === 11) {
+              dealType = DealType.COMMISSION_AGENT_MONTHLY;
+            } else if (deal.type === 12) {
+              dealType = DealType.INTEREST;
+            } else if (deal.type === 13) {
+              dealType = DealType.BUY_CANCELED;
+            } else if (deal.type === 14) {
+              dealType = DealType.SELL_CANCELED;
+            } else if (deal.type === 15) {
+              dealType = DealType.DIVIDEND;
+            } else if (deal.type === 16) {
+              dealType = DealType.DIVIDEND_FRANKED;
+            } else if (deal.type === 17) {
+              dealType = DealType.TAX;
+            } else {
+              throw new Error(`Unknown MT5 deal type: ${deal.type}`);
+            }
+
             if (entryType != "IN") numberOfTrades++;
 
             await this.prisma.deal.upsert({
@@ -332,6 +375,7 @@ export class TradingAccountService {
                 commission: deal.commission,
                 fee: deal.fee,
                 comment: deal.comment,
+                type: dealType,
                 updatedAt: new Date(),
               },
 
@@ -351,6 +395,7 @@ export class TradingAccountService {
                 time: new Date(deal.time),
                 side: deal.type === 1 ? "LONG" : "SHORT",
                 entryType: entryType,
+                type: dealType,
                 // fees
                 swap: deal.swap ?? 0,
                 commission: deal.commission ?? 0,

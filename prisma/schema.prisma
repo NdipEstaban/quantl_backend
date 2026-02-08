@@ -130,6 +130,27 @@ enum PositionSide {
   FLAT // No position
 }
 
+enum DealType {
+  BUY
+  SELL
+  BALANCE
+  CREDIT
+  CHARGE
+  CORRECTION
+  BONUS
+  COMMISSION
+  COMMISSION_DAILY
+  COMMISSION_MONTHLY
+  COMMISSION_AGENT_DAILY
+  COMMISSION_AGENT_MONTHLY
+  INTEREST
+  BUY_CANCELED
+  SELL_CANCELED
+  DIVIDEND
+  DIVIDEND_FRANKED
+  TAX
+}
+
 enum AuthProviders {
   FACEBOOK
   GOOGLE
@@ -377,6 +398,7 @@ model Deal {
   time      DateTime
   side      OrderSide // "LONG" or "SHORT" (universal)
   entryType String? // "IN", "OUT", "IN_OUT" (for MT5), or platform-specific
+  type      DealType?
 
   // Fees and costs
   swap       Float @default(0)

@@ -591,11 +591,24 @@ export class MetricsController {
     @Query("startDate") startDate?: string,
     @Query("endDate") endDate?: string,
   ) {
-    const start = this.parseDate(startDate);
+    const start = this.parseDate(startDate); // Assuming this returns Luxon DateTime
     const end = this.parseDate(endDate);
+
+    let prevPeriodStart: DateTime | undefined;
+    let prevPeriodEnd: DateTime | undefined;
+
+    if (start && end) {
+      // Calculate the duration of the current selection
+      const duration = end.diff(start);
+
+      // Move the window back by that exact duration
+      prevPeriodStart = start.minus(duration);
+      prevPeriodEnd = start;
+    }
 
     // Execute all metrics in parallel for better performance
     const [
+      vitalsPrevPeriod,
       vitals,
       equityGrowth,
       advancedMetrics,
@@ -607,6 +620,8 @@ export class MetricsController {
       profitDistribution,
       consistencyMetrics,
     ] = await Promise.all([
+      // Pass both start and end for the previous period to avoid overlap
+      this.metricsService.getVitals(tradingAccountId, prevPeriodStart, prevPeriodEnd),
       this.metricsService.getVitals(tradingAccountId, start, end),
       this.metricsService.getEquityGrowth(tradingAccountId, start, end),
       this.metricsService.getAdvancedMetrics(tradingAccountId, start, end),
@@ -621,20 +636,22 @@ export class MetricsController {
 
     // Get current month and previous month for comparison
     const now = DateTime.now();
-    const currentMonth = await this.metricsService.getDailyTradesForMonth(
-      tradingAccountId,
-      now.year,
-      now.month,
-    );
 
-    const previousMonth = await this.metricsService.getDailyTradesForMonth(
-      tradingAccountId,
-      now.month === 1 ? now.year - 1 : now.year,
-      now.month === 1 ? 12 : now.month - 1,
-    );
+    // These are usually faster but still good to run together if possible
+    const [currentMonth, previousMonth] = await Promise.all([
+      this.metricsService.getDailyTradesForMonth(tradingAccountId, now.year, now.month),
+      this.metricsService.getDailyTradesForMonth(
+        tradingAccountId,
+        now.month === 1 ? now.year - 1 : now.year,
+        now.month === 1 ? 12 : now.month - 1,
+      ),
+    ]);
 
     return {
-      vitals,
+      vitals: {
+        current: vitals,
+        previous: vitalsPrevPeriod,
+      },
       equityGrowth,
       advancedMetrics,
       profitByDay,

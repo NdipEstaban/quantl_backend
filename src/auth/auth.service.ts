@@ -197,36 +197,40 @@ export class AuthService {
     };
   }
 
-  async refreshToken(userId: string, currentRefreshToken: string) {
+  async refreshToken(currentRefreshToken: string) {
     // Validate current refresh token
-    await this.validateRefreshToken(userId, currentRefreshToken);
+    const user = await this.validateRefreshToken(currentRefreshToken);
 
-    const user = await this.userService.findOne(userId);
     if (!user) {
-      throw new UnauthorizedException(ErrorCodes.USER_NOT_FOUND);
+      throw new UnauthorizedException(ErrorCodes.UNAUTHORIZED);
     }
 
     // Generate new tokens
-    const tokens = await this.generateAndStoreTokens(userId, user.email);
+    const tokens = await this.generateAndStoreTokens(user.id, user.email);
 
     return {
-      user: this.mapToCurrentUser(user),
       ...tokens,
     };
   }
 
-  private async validateRefreshToken(userId: string, refreshToken: string): Promise<{ id: string }> {
-    const user = await this.userService.findOne(userId);
-    if (!user || !user.hashedRefreshToken) {
-      throw new UnauthorizedException(ErrorCodes.UNAUTHORIZED);
-    }
+  private async validateRefreshToken(refreshToken: string): Promise<User | void> {
+    const payload = await this.jwtService.verifyAsync<AuthJwtPayload>(refreshToken, {
+      secret: this.refreshTokenConfig.secret,
+    });
 
-    const refreshTokenMatches = await argon2.verify(user.hashedRefreshToken, refreshToken);
-    if (!refreshTokenMatches) {
-      throw new UnauthorizedException(ErrorCodes.UNAUTHORIZED);
-    }
+    if (payload && payload.email) {
+      const user = await this.userService.findByEmail(payload.email);
+      if (!user || !user.hashedRefreshToken) {
+        throw new UnauthorizedException(ErrorCodes.UNAUTHORIZED);
+      }
 
-    return { id: userId };
+      const refreshTokenMatches = await argon2.verify(user.hashedRefreshToken, refreshToken);
+      if (!refreshTokenMatches) {
+        throw new UnauthorizedException(ErrorCodes.UNAUTHORIZED);
+      }
+
+      return user;
+    }
   }
 
   async logOut(userId: string, ipAddress?: string, userAgent?: string) {

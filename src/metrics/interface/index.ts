@@ -14,6 +14,7 @@ export interface Vitals {
   percentageDrawdown: number;
   averageWin: number;
   averageLoss: number;
+  maxDrawdownDurationInDays: number;
 }
 
 export interface AdvancedMetrics {
