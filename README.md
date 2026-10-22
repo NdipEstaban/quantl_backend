@@ -1,98 +1,199 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Quantl Trading Journal API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Quantl is a backend API for a trading journal and account analytics platform. It is built with NestJS and TypeScript, stores application and trading data in PostgreSQL through Prisma, and integrates with a MetaTrader service to connect accounts and synchronize trading activity.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+The API provides account and trade data that a client application can use to review performance, understand trading habits, and keep a journal of strategy and execution notes.
 
-## Description
+## Highlights
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- **Account and authentication services** — registration, email verification, password login, token refresh, logout, password recovery, and Google and Facebook OAuth flows.
+- **Trading account management** — connect, update, disconnect, and manually synchronize trading accounts.
+- **MetaTrader integration** — an HTTP integration with a separately hosted MetaTrader service for account, order, position, and trade-history operations.
+- **Trading analytics** — account vitals, equity growth, daily activity, profit distribution, streaks, holding time, consistency, and other metrics.
+- **Automated synchronization** — scheduled account synchronization for configured intervals, from every five minutes through daily.
+- **Journal and playbook data model** — structured trade notes, ratings, emotional state, mistakes, tags, images, and strategy playbooks.
+- **API documentation** — interactive Swagger UI generated from the NestJS API.
+- **Performance and validation** — request validation, response caching, and cache invalidation for account changes.
 
-## Project setup
+> This repository contains the backend service. A PostgreSQL database is required. MetaTrader connectivity, email delivery, Redis caching, and OAuth providers require their corresponding external services and credentials.
 
-```bash
-$ npm install
-```
+## Technology
 
-## Compile and run the project
+- [NestJS](https://nestjs.com/) 11 and TypeScript
+- [PostgreSQL](https://www.postgresql.org/)
+- [Prisma](https://www.prisma.io/) 7 with the PostgreSQL driver adapter
+- [Redis](https://redis.io/) and an in-memory cache
+- Passport strategies for local authentication, JWT, Google, and Facebook
+- Swagger / OpenAPI
+- Jest and Supertest
 
-```bash
-# development
-$ npm run start
+## Requirements
 
-# watch mode
-$ npm run start:dev
+- Node.js 20 or later
+- npm
+- PostgreSQL
+- Redis
+- A running MetaTrader integration service for account and trade synchronization
 
-# production mode
-$ npm run start:prod
-```
+An SMTP account is needed for email verification and password recovery. OAuth credentials are needed only if you plan to enable the corresponding sign-in providers.
 
-## Run tests
+## Getting started
+
+### 1. Install dependencies
+
+From the project directory:
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm install
 ```
 
-## Deployment
+### 2. Configure environment variables
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Create a `.env` file in the project root. Do not commit this file or put real credentials in examples, screenshots, or issue reports.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+```dotenv
+# Application
+PORT=3000
+NODE_ENV=development
+CORS_ORIGIN=http://localhost:3001
+
+# PostgreSQL
+DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/quantl?schema=public
+
+# Authentication (use long, unique, random secrets)
+JWT_SECRET=replace-with-a-long-random-secret
+REFRESH_JWT_SECRET=replace-with-a-different-long-random-secret
+
+# MetaTrader integration service
+MT5_SERVICE_URL=http://localhost:8000/api
+MT5_API_KEY=replace-with-your-integration-service-api-key
+
+# Redis
+REDIS_URL=redis://localhost:6379/0
+
+# SMTP email delivery
+EMAIL_HOST=smtp.example.com
+EMAIL_PORT=587
+EMAIL_SECURE=false
+EMAIL_USER=your-smtp-username
+EMAIL_PASSWORD=your-smtp-password
+EMAIL_FROM_NAME=Quantl
+EMAIL_FROM_ADDRESS=no-reply@example.com
+
+# Optional Google OAuth
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_CALLBACK_URL=http://localhost:3000/auth/google/callback
+
+# Optional Facebook OAuth
+FACEBOOK_APP_ID=
+FACEBOOK_APP_SECRET=
+FACEBOOK_CALLBACK_URL=http://localhost:3000/auth/facebook/callback
+
+# Encryption key for stored trading-account credentials
+PASSWORD_ENCRYPTION_KEY=replace-with-a-unique-secret
+```
+
+Use the variable names expected by the configured provider, and set the OAuth callback URLs to the URLs registered with Google or Facebook. Keep production secrets in your deployment platform's secret manager rather than in a committed file.
+
+### 3. Generate Prisma Client and apply migrations
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npx prisma generate
+npx prisma migrate deploy
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+`migrate deploy` applies the checked-in migrations to the database configured by `DATABASE_URL`. For local schema development, use the Prisma migration workflow appropriate to your change and commit the resulting migration.
 
-## Resources
+### 4. Run the API
 
-Check out a few resources that may come in handy when working with NestJS:
+```bash
+# Development with file watching
+npm run start:dev
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+# Production build and start
+npm run build
+npm run start:prod
+```
 
-## Support
+The API listens on `http://localhost:3000` by default. Set `PORT` to change the port. Interactive API documentation is available at:
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```text
+http://localhost:3000/docs
+```
 
-## Stay in touch
+There is no global `/api` route prefix currently enabled. Routes are served from their documented controller paths, such as `/auth` and `/metrics`.
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## API overview
+
+Swagger UI at `/docs` is the source of truth for request schemas, parameters, responses, and authorization requirements. The main route groups include:
+
+| Route group | Examples | Purpose |
+| --- | --- | --- |
+| `/auth` | `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`, `GET /auth/profile` | Account access, tokens, email verification, password recovery, and OAuth |
+| `/trade-accounts` | `GET /trade-accounts/connected`, `POST /trade-accounts/connect/mt5`, `POST /trade-accounts/:accountId/sync` | Connect and manage trading accounts and synchronize their data |
+| `/metrics` | `GET /metrics/vitals`, `GET /metrics/equity-growth`, `GET /metrics/summary` | Trading performance and activity analytics |
+| `/metatrader` | `GET /metatrader/health`, `GET /metatrader/account/info`, `GET /metatrader/trade/history` | Integration-service health and MetaTrader account/trade operations |
+
+Authentication uses access and refresh tokens. The Swagger UI includes bearer authentication where configured. Some OAuth callbacks use HTTP-only cookies; production deployments should use HTTPS and configure trusted callback URLs and CORS origins for the client application.
+
+## Data and synchronization
+
+Prisma models cover users and sessions, trading accounts, deals, orders, positions, journaled trades, playbooks, verification tokens, audit logs, subscriptions, and payments. Trading data is associated with trading accounts and includes platform-specific metadata where needed.
+
+The account synchronization scheduler processes accounts configured for these frequencies:
+
+- Every 5, 15, or 30 minutes
+- Every 1 or 4 hours
+- Daily
+
+The scheduler runs within the API process. If you run multiple API replicas, account for that when deploying so scheduled work is not unintentionally duplicated.
+
+## Useful commands
+
+```bash
+npm run start:dev    # Start the development server
+npm run build        # Compile the application
+npm run start:prod   # Start the compiled application
+npm run lint         # Run ESLint (this script applies fixes)
+npm run format       # Format source and test files
+npm run test         # Run unit tests
+npm run test:e2e     # Run end-to-end tests
+npm run test:cov     # Run tests with coverage
+```
+
+## Project structure
+
+```text
+src/
+  auth/             Authentication, Passport strategies, and token flows
+  cache/            Cache service, decorators, and invalidation
+  common/           Shared filters, interceptors, and scheduled jobs
+  config/           Application and integration configuration
+  email/            Email delivery and templates
+  metatrader/       HTTP client and routes for the MetaTrader service
+  metrics/          Trading analytics endpoints and calculations
+  trading-account/  Trading account management and synchronization
+  user/             User-related services and routes
+  prisma.service.ts Prisma client and PostgreSQL adapter
+prisma/
+  schema.prisma     Database models and enums
+  migrations/       Versioned database migrations
+test/               End-to-end tests
+```
+
+## Security notes
+
+- Never commit `.env` files, access tokens, OAuth secrets, SMTP credentials, database URLs, or trading-account credentials.
+- Set unique, high-entropy JWT and encryption secrets before running outside local development.
+- Use HTTPS in production and restrict `CORS_ORIGIN` to trusted client origins.
+- Use read-only or investor credentials for trading integrations wherever the platform supports them.
+- Do not expose the API or MetaTrader integration service publicly without reviewing authentication, authorization, network access, and secret management for your deployment.
+
+## Contributing
+
+Contributions are welcome. Before opening a pull request, please run the relevant tests and describe the behavior changed. For database changes, include the Prisma migration and update any related documentation.
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+No open-source license is currently specified in this repository. Unless a license is added, standard copyright restrictions apply; check with the project owner before reusing or redistributing the code.
